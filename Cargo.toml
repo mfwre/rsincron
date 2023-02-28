@@ -1,0 +1,12 @@
+[package]
+name = "rsincron"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/mfwre/rsincron"
+homepage = "https://github.com/mfwre/rsincron"
+documentation = "https://github.com/mfwre/rsincron"
+license = "GPL-3.0-or-later"
+description = "Rust rewrite of the incredibly useful but abandoned incron software"
+readme = "README.md"
+
+[dependencies]
