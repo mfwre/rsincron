@@ -65,10 +65,12 @@ fn main() {
             let mut fields = line.split_whitespace();
 
             let Some(path) = fields.next() else {
+                eprintln!("watched path missing: skipping");
                 continue
             };
 
             let Some(masks) = fields.next() else {
+                eprintln!("watch masks missing: skipping");
                 continue
             };
 
@@ -79,11 +81,11 @@ fn main() {
             );
 
             let types = HashMap::from(EVENT_TYPES);
-            for mask in masks.split(',') {
-                if let None = types.get(&mask) {
-                    return;
-                }
-            }
+            let masks = masks
+                .split(',')
+                .take_while(|m| types.get(m).is_some())
+                .collect::<Vec<&str>>()
+                .join(",");
 
             let table_entry = format!("{}\t{}\t{}", path, masks, command);
             buf.push_str(&table_entry);
@@ -105,5 +107,6 @@ fn main() {
             "failed to delete {}: exiting",
             table_path.to_string_lossy()
         ));
+        println!("user table cleared");
     }
 }
