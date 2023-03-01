@@ -13,6 +13,9 @@
 	  working and which aren't)
 	- [ ] build some sort of *same flag* watch if a directory is made inside a 
 	  watched one (with recursion **on**)
+- [ ] write every single type of test
+- [ ] cleanup and reorganize code to allow more modularity
+- [ ] write documentation
 
 ## About
 This is a **very not ready** piece of software. Be ready for things not working
