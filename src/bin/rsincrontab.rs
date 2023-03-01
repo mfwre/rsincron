@@ -1,9 +1,8 @@
 use clap::Parser;
-use log::debug;
 use rsincronlib::EVENT_TYPES;
 use std::{
+    collections::HashMap,
     fs::{self, read_to_string, DirBuilder, File},
-    path::Path,
     process::Command,
 };
 use uuid::Uuid;
@@ -28,30 +27,9 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    fern::Dispatch::new()
-        // Perform allocation-free log formatting
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "{}[{}][{}] {}",
-                chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
-                record.target(),
-                record.level(),
-                message
-            ))
-        })
-        .level(log::LevelFilter::Debug)
-        .chain(fern::log_file("/var/log/rsincron.log").expect("couldn't open logfile: exiting"))
-        .apply()
-        .expect("logging didnt't start: exiting");
-
     let editor = std::env::var("EDITOR").unwrap_or(String::from("/usr/bin/vi"));
     let user = std::env::var("USER").expect("USER is not set: exiting");
-    let home_dir = std::env::var("HOME").expect("HOME is not set: exiting");
-
-    let rsincron_dir = Path::new(&home_dir)
-        .join(".local")
-        .join("share")
-        .join("rsincron");
+    let rsincron_dir = rsincronlib::get_user_table_path();
     let table_path = rsincron_dir.join(user);
 
     if args.edit {
@@ -90,9 +68,9 @@ fn main() {
                     .collect::<Vec<String>>(),
             );
 
+            let types = HashMap::from(EVENT_TYPES);
             for mask in masks.split(',') {
-                if !EVENT_TYPES.contains(&mask) {
-                    debug!("{mask} not in EVENT_TYPES: exiting");
+                if let None = types.get(&mask) {
                     return;
                 }
             }
