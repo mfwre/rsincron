@@ -1,0 +1,18 @@
+pub const EVENT_TYPES: [&str; 16] = [
+    "IN_ACCESS",
+    "IN_ATTRIB",
+    "IN_CLOSE_WRITE",
+    "IN_CLOSE_NOWRITE",
+    "IN_CREATE",
+    "IN_DELETE",
+    "IN_DELETE_SELF",
+    "IN_MODIFY",
+    "IN_MOVE_SELF",
+    "IN_MOVED_FROM",
+    "IN_MOVED_TO",
+    "IN_OPEN",
+    "IN_IGNORED",
+    "IN_ISDIR",
+    "IN_Q_OVERFLOW",
+    "IN_UNMOUNT",
+];
