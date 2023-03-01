@@ -15,6 +15,10 @@ async fn main() {
 
     let mut commands = HashMap::new();
     for line in table.lines() {
+        if line.clone().chars().nth(0) == Some('#') {
+            continue;
+        };
+
         let mut fields = line.split('\t');
         let Some(path) = dbg!(fields.next()) else {
             continue;
@@ -41,33 +45,54 @@ async fn main() {
         };
 
         command.arg("-c");
-        commands
-            .entry(descriptor)
-            .or_insert((command, path, arguments));
+        commands.entry(descriptor).or_insert((path, arguments));
     }
 
     let buffer = [0; 1024];
     let mut stream = inotify.event_stream(buffer).unwrap();
 
-    loop {
-        let event = stream.try_next().await;
-        match event {
-            Ok(event) => {
-                if let Some(event) = event {
-                    let (command, path, arguments) = commands.get_mut(&event.wd).unwrap();
-                    let filename = match event.name {
-                        Some(string) => string.to_str().unwrap_or_default().to_owned(),
-                        _ => String::default(),
-                    };
+    while let Ok(event) = stream.try_next().await {
+        let Some(event) = event else {
+            continue;
+        };
 
-                    let arguments = [("$#", &filename), ("$@", &path.to_string())]
-                        .into_iter()
-                        .fold(arguments.to_string(), |arg, new| arg.replace(new.0, new.1));
+        println!("{event:#?}");
+        let (path, arguments) = commands.get(&event.wd).unwrap();
+        let filename = match event.name {
+            Some(string) => string.to_str().unwrap_or_default().to_owned(),
+            _ => String::default(),
+        };
 
-                    let _ = command.arg(arguments).spawn();
+        let masks = format!("{:?}", event.mask).replace(" | ", ",");
+        let arguments = {
+            let mut formatted = String::new();
+            let mut dollar = false;
+            for c in arguments.chars() {
+                if c == '$' {
+                    if !dollar {
+                        dollar = true;
+                    } else {
+                        formatted.push(c);
+                        dollar = false;
+                    }
+                } else {
+                    if dollar {
+                        match c {
+                            '#' => formatted.push_str(&filename),
+                            '@' => formatted.push_str(&path.to_string()),
+                            '%' => formatted.push_str(&masks),
+                            '&' => formatted.push_str(&event.mask.bits().to_string()),
+                            _ => (),
+                        }
+                        dollar = false;
+                    } else {
+                        formatted.push(c);
+                    }
                 }
             }
-            Err(err) => println!("{:#?}", err),
-        }
+            formatted
+        };
+
+        let _ = Command::new("bash").arg("-c").arg(arguments).spawn();
     }
 }
