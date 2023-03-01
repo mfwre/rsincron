@@ -12,3 +12,8 @@ readme = "README.md"
 keywords = ["incron"]
 
 [dependencies]
+clap = { version = "4.1.8", features = ["derive"] }
+uuid = { version = "1.3.0", features = ["v4"] }
+
+[[bin]]
+name = "rsincrontab"
