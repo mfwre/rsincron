@@ -1,7 +1,7 @@
 [package]
-name = "rsincron"
+name = "rsincrond"
 authors = ["Mattia Repetto <mfwre-gh@proton.me>"]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 repository = "https://github.com/mfwre/rsincron"
 homepage = "https://github.com/mfwre/rsincron"
@@ -21,9 +21,6 @@ uuid = { version = "1.3.0", features = ["v4"] }
 
 [[bin]]
 name = "rsincrontab"
-
-[[bin]]
-name = "rsincrond"
 
 [lib]
 name = "rsincronlib"

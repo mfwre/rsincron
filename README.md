@@ -1,7 +1,18 @@
 # rsincron
+![crates.io](https://img.shields.io/crates/v/rsincron.svg)
+
 ## Description
 `rsincron` aims to be a drop-in replacement of the, it seems, abandoned
 `incron` projected. 
+
+You'll get two executables:
+1. `rsincrontab`: **use** this to manage your table
+2. `rsincrond`: the daemon itself. It isn't a daemon at the moment and I don't
+   think I'll turn it into one. Use your favourite init system to manage it.
+
+## Installation
+### Cargo
+Run ```cargo install rsincron```.
 
 ## Roadmap
 - [ ] `rsincrontab`: `incrontab`'s sibling
@@ -27,6 +38,9 @@ contribution questions.
 
 Also, I neved had a public repository. If you want to share some experience
 on how to maintain one feel welcome to do so.
+
+Please expect lots of bugs, `rsincron` isn't alpha yet. It looks closer to a
+proof-of-concept at the moment.
 
 ## Known issues
 - [ ] daemon ignores events if watched folder is deleted and recreated while
