@@ -1,7 +1,7 @@
 [package]
 name = "rsincron"
 authors = ["Mattia Repetto <mfwre-gh@proton.me>"]
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 repository = "https://github.com/mfwre/rsincron"
 homepage = "https://github.com/mfwre/rsincron"
