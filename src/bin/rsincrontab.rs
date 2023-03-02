@@ -1,5 +1,5 @@
 use clap::Parser;
-use rsincronlib::EVENT_TYPES;
+use rsincronlib::events::EVENT_TYPES;
 use std::{
     collections::HashMap,
     fs::{self, read_to_string, DirBuilder, File},
