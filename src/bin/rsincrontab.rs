@@ -1,5 +1,5 @@
 use clap::Parser;
-use rsincronlib::EVENT_TYPES;
+use rsincronlib::events::EVENT_TYPES;
 use std::{
     collections::HashMap,
     fs::{self, read_to_string, DirBuilder, File},
@@ -24,6 +24,72 @@ struct Args {
 
     #[clap(short, long)]
     remove: bool,
+}
+
+#[derive(Debug)]
+enum ParseError {
+    InvalidMask { _mask: String },
+    InvalidFlag { _flag: String, _value: String },
+    UnknownFlag { _flag: String },
+    FieldMissing { _field: String },
+}
+
+fn parse_line(line: String) -> Result<String, ParseError> {
+    if line.chars().nth(0) == Some('#') {
+        return Ok(format!("{line}\n"));
+    };
+
+    let mut fields = line.split_whitespace();
+    // TODO: do better error logging here
+    let path = fields.next().ok_or(ParseError::FieldMissing {
+        _field: String::from("path"),
+    })?;
+    let masks = fields.next().ok_or(ParseError::FieldMissing {
+        _field: String::from("mask"),
+    })?;
+
+    let command = fields
+        .map(|m| m.to_string())
+        .collect::<Vec<String>>()
+        .join(" ");
+
+    let types = HashMap::from(EVENT_TYPES);
+    let mut valid_masks = Vec::new();
+    for m in masks.split(',') {
+        if types.get(m).is_some() {
+            valid_masks.push(m);
+            continue;
+        } else if m.contains('=') {
+            match m.split_once('=') {
+                Some(("recursive", value)) => {
+                    value.parse::<bool>().map_err(|_| ParseError::InvalidFlag {
+                        _flag: String::from("recursive"),
+                        _value: value.to_string(),
+                    })?;
+
+                    valid_masks.push(m);
+                    continue;
+                }
+                Some((flag, _)) => {
+                    return Err(ParseError::UnknownFlag {
+                        _flag: flag.to_string(),
+                    })
+                }
+                _ => (),
+            }
+        }
+
+        return Err(ParseError::InvalidMask {
+            _mask: m.to_string(),
+        });
+    }
+
+    Ok(format!(
+        "{}\t{}\t{}\n",
+        path,
+        valid_masks.join(","),
+        command
+    ))
 }
 
 fn main() {
@@ -56,40 +122,10 @@ fn main() {
 
         let mut buf = String::new();
         for line in read_to_string(tmpfile_path).unwrap_or_default().lines() {
-            if line.clone().chars().nth(0) == Some('#') {
-                buf.push_str(line);
-                buf.push('\n');
-                continue;
-            };
-
-            let mut fields = line.split_whitespace();
-
-            let Some(path) = fields.next() else {
-                eprintln!("watched path missing: skipping");
-                continue
-            };
-
-            let Some(masks) = fields.next() else {
-                eprintln!("watch masks missing: skipping");
-                continue
-            };
-
-            let command = String::from_iter(
-                fields
-                    .map(|item| format!("{item} "))
-                    .collect::<Vec<String>>(),
-            );
-
-            let types = HashMap::from(EVENT_TYPES);
-            let masks = masks
-                .split(',')
-                .take_while(|m| types.get(m).is_some())
-                .collect::<Vec<&str>>()
-                .join(",");
-
-            let table_entry = format!("{}\t{}\t{}", path, masks, command);
-            buf.push_str(&table_entry);
-            buf.push('\n');
+            match parse_line(line.to_string().clone()) {
+                Ok(line) => buf.push_str(&line),
+                Err(err) => eprintln!("{err:?}"),
+            }
         }
 
         fs::write(&table_path, buf).expect(&format!(
