@@ -46,7 +46,7 @@ Run ```cargo install rsincron```.
 - [ ] `rsincrontab`: `incrontab`'s sibling
 	- [ ] add flags for
 		- [x] *recursion* 
-		- [ ]*dotdirs*
+		- [ ] *dotdirs*
 	- [ ] add more verbose output
 
 - [ ] `rsincrond`: the daemon itself
