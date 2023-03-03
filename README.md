@@ -40,9 +40,6 @@ Following character combinations get expanded before being run:
 `$HOME/.config/rsincron.toml`.
 ```toml
 # Missing values from a config file default to the following
-[general]
-current_user = "$USER"
-home_directory = "$HOME"
 watch_table = "$HOME/.local/share/rsincron.table"
 poll_time = 1000  # time [ms] between health loop iteractions
 
