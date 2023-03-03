@@ -37,14 +37,17 @@ Following character combinations get expanded before being run:
 
 #### Configuration
 `rsincrond` and `rsincrontab` look for a configuration file located under
-`$HOME/.config/rsincron.toml`. If not found the settings to to the default
-ones:
+`$HOME/.config/rsincron.toml`.
 ```toml
+# Missing values from a config file default to the following
 [general]
-recursive_watch_poll_time = 5  # time between health loop iteractions
+current_user = "$USER"
+home_directory = "$HOME"
+watch_table = "$HOME/.local/share/rsincron.table"
+poll_time = 1000  # time [ms] between health loop iteractions
 
 [logging]
-file = "/var/log/rsincrond.log" # logfile (if it lacks permissions logfile gets skipped)
+file = "/var/log/rsincron.log" # logfile path
 stdout = true # if logging has to go also to standart output
 level = "warn" # loglevel <debug|info|warn|error>
 ```
@@ -66,6 +69,8 @@ Run ```cargo install rsincron```.
 	  working and which aren't)
 	- [x] build some sort of *same flag* watch if a directory is made inside a 
 	  watched one (with recursion **on**)
+	  - [ ] add more flags:
+	  	- [ ] reload table (maybe from `rsincrontab`)
 
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
@@ -76,8 +81,7 @@ Some sort of runtime checks:
 - [x] loop checks for missed folders, if recursion is on, and adds them to the
   active watches
 - [x] general, configurable, logging (now it's very minimal to stdin/stderr)
-- [ ] loop checks for removed folders (if active watch is now looking nowhere
-  move it to FailedWatches)
+- [x] loop checks for removed folders 
 - [ ] better debug and info logging
 
 
@@ -96,7 +100,7 @@ Please expect lots of bugs, `rsincron` isn't alpha yet. It looks closer to a
 proof-of-concept at the moment.
 
 ## Known issues
-- [ ] daemon ignores events if watched folder is deleted and recreated while
+- [x] daemon ignores events if watched folder is deleted and recreated while
   running
 - [x] no recursion is available at the moment
 - [x] if started and watched folder isn't available daemon skips watch

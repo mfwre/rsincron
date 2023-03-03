@@ -7,7 +7,7 @@ use log::{error, info};
 use rsincronlib::{events::EVENT_TYPES, handler_config::HandlerConfig};
 use std::{
     collections::HashMap,
-    fs::{self, read_to_string, DirBuilder, File},
+    fs::{self, read_to_string, File},
     io::{self, Write},
     path::Path,
     process::Command,
@@ -122,14 +122,6 @@ fn main() {
         .expect("failed to set up logging: exiting");
 
     if args.edit {
-        DirBuilder::new()
-            .recursive(true)
-            .create(&config.home_directory)
-            .expect(&format!(
-                "failed to create {} folder: exiting",
-                config.home_directory.to_string_lossy()
-            ));
-
         let tmpfile_path = std::env::temp_dir().join(Uuid::new_v4().to_string());
         if Path::new(&config.watch_table).exists() {
             fs::copy(&config.watch_table, &tmpfile_path).expect("failed to open tmp file: exiting");
