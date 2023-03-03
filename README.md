@@ -35,6 +35,20 @@ Following character combinations get expanded before being run:
 - `$%` -> triggered event masks as text
 - `$&` -> triggered event masks as bits
 
+#### Configuration
+`rsincrond` and `rsincrontab` look for a configuration file located under
+`$HOME/.config/rsincron.toml`. If not found the settings to to the default
+ones:
+```toml
+[general]
+recursive_watch_poll_time = 5  # time between health loop iteractions
+
+[logging]
+file = "/var/log/rsincrond.log" # logfile (if it lacks permissions logfile gets skipped)
+stdout = true # if logging has to go also to standart output
+level = "warn" # loglevel <debug|info|warn|error>
+```
+
 
 ## Installation
 ### Cargo
