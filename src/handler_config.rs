@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     events::EVENT_TYPES,
-    handler::{Handler, Watch, WatchConfig},
+    handler::{AddWatchError, Handler, Watch, WatchConfig},
 };
 
 #[derive(Deserialize, Clone)]
@@ -106,10 +106,7 @@ impl HandlerConfig {
             };
 
             match handler.add_watch(watch.clone(), true, None) {
-                Err(_) => {
-                    watch.config.table_watch = true;
-                    handler.failed_watches.insert(watch.clone())
-                }
+                Err(AddWatchError::FolderDoesntExit(watch)) => handler.failed_watches.insert(watch),
                 _ => true,
             };
 

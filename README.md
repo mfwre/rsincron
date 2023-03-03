@@ -101,3 +101,4 @@ proof-of-concept at the moment.
   running
 - [x] no recursion is available at the moment
 - [x] if started and watched folder isn't available daemon skips watch
+- [ ] `mkdir -p watched_dir/{1,2,3}/2/3` doesn't trigger on subfolders
