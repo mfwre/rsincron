@@ -1,6 +1,6 @@
 use crate::handler_config::HandlerConfig;
 use inotify::{EventStream, Inotify, WatchDescriptor, WatchMask};
-use log::{debug, info, warn};
+use log::{info, warn};
 use std::{
     collections::{HashMap, HashSet},
     error,
@@ -11,15 +11,26 @@ use walkdir::WalkDir;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WatchConfig {
     pub recursive: bool,
+    pub table_watch: bool,
 }
 
 impl Default for WatchConfig {
     fn default() -> Self {
-        Self { recursive: false }
+        Self {
+            recursive: false,
+            table_watch: false,
+        }
     }
 }
 
-pub type Watch = (String, WatchMask, String, WatchConfig);
+#[derive(PartialEq, Eq, Hash, Clone)]
+pub struct Watch {
+    pub path: PathBuf,
+    pub mask: WatchMask,
+    pub command: String,
+    pub config: WatchConfig,
+}
+
 pub type Watches = HashMap<WatchDescriptor, Watch>;
 pub type FailedWatches = HashSet<Watch>;
 
@@ -42,11 +53,11 @@ impl Handler {
 
     pub fn add_watch(
         &mut self,
-        (file_path, mask, command, watch_config): Watch,
+        mut watch: Watch,
+        from_setup: bool,
         folder_name: Option<String>,
     ) -> Result<(), AddWatchError> {
-        debug!("watch add: {file_path}");
-        let mut pathbuf = PathBuf::from(file_path);
+        let mut pathbuf = PathBuf::from(&watch.path);
 
         if let Some(folder_name) = folder_name {
             pathbuf.push(folder_name.to_string());
@@ -56,19 +67,18 @@ impl Handler {
             return Err(AddWatchError::PathToStr)
         };
 
-        let Ok(descriptor) = self.inotify.add_watch(&path.to_string(), mask) else {
-            self.failed_watches.insert((path.to_string(), mask, command, watch_config));
-            warn!("watch setup failed: {} for masks {:?}", path, mask);
+        if !from_setup {
+            watch.config.table_watch = false;
+        }
+
+        info!("watch setup: {} for masks {:?}", path, watch.mask);
+        let Ok(descriptor) = self.inotify.add_watch(&path.to_string(), watch.mask) else {
+            self.failed_watches.insert(watch.clone());
+            warn!("watch setup failed: {} for masks {:?}", path, watch.mask);
             return Err(AddWatchError::FolderDoesntExit)
         };
 
-        info!("watch setup: {} for masks {:?}", path, mask);
-        self.active_watches.entry(descriptor).or_insert((
-            path.to_string(),
-            mask,
-            command,
-            watch_config,
-        ));
+        self.active_watches.entry(descriptor).or_insert(watch);
 
         Ok(())
     }
@@ -80,22 +90,22 @@ impl Handler {
             .expect("error opening event stream: exiting")
     }
 
-    pub fn recursive_add_watch(&mut self, (file_path, mask, command, watch_config): Watch) {
-        for entry in WalkDir::new(file_path)
+    pub fn recursive_add_watch(&mut self, watch: Watch) {
+        for entry in WalkDir::new(&watch.path)
             .min_depth(1)
             .into_iter()
             .filter_entry(|e| e.file_type().is_dir())
         {
             let Ok(entry) = entry else {
-                    continue;
-                };
+                        continue;
+                    };
 
-            let Some(path) = entry.path().to_str() else {
-                    continue;
-                };
+            let watch = Watch {
+                path: entry.path().to_path_buf(),
+                ..watch.clone()
+            };
 
-            let watch = (path.to_string(), mask, command.clone(), watch_config);
-            match self.add_watch(watch.clone(), None) {
+            match self.add_watch(watch.clone(), false, None) {
                 Err(_) => self.failed_watches.insert(watch),
                 _ => true,
             };

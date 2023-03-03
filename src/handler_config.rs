@@ -9,14 +9,25 @@ use serde::Deserialize;
 
 use crate::{
     events::EVENT_TYPES,
-    handler::{Handler, WatchConfig},
+    handler::{Handler, Watch, WatchConfig},
 };
 
 #[derive(Deserialize, Clone)]
+#[serde(default)]
 pub struct LoggingConfig {
     pub file: PathBuf,
     pub stdout: bool,
     pub level: log::LevelFilter,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            file: PathBuf::from("/var/log/rsincron.log"),
+            stdout: true,
+            level: log::LevelFilter::Warn,
+        }
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -25,7 +36,7 @@ pub struct HandlerConfig {
     pub current_user: String,
     pub home_directory: PathBuf,
     pub watch_table: PathBuf,
-    pub recursive_watch_poll_time: u64,
+    pub poll_time: u64,
     pub logging: LoggingConfig,
 }
 
@@ -39,13 +50,9 @@ impl Default for HandlerConfig {
         Self {
             current_user,
             home_directory: home_directory.clone(),
-            watch_table: home_directory.join(".local/share/rsincron/table"),
-            recursive_watch_poll_time: 5,
-            logging: LoggingConfig {
-                file: PathBuf::from("/var/log/rsincrond.log"),
-                stdout: true,
-                level: log::LevelFilter::Warn,
-            },
+            watch_table: home_directory.join(".local/share/rsincron.table"),
+            poll_time: 1000,
+            logging: LoggingConfig::default(),
         }
     }
 }
@@ -72,7 +79,7 @@ impl HandlerConfig {
             };
 
             let mut mask = WatchMask::empty();
-            let mut watch_config = WatchConfig::default();
+            let mut config = WatchConfig::default();
             let Some(masks) = fields.next() else {
                 continue;
             };
@@ -81,9 +88,7 @@ impl HandlerConfig {
                 match event_types.get(m) {
                     Some(m) => mask.insert(*m),
                     _ => match m.split_once('=') {
-                        Some(("recursive", value)) => {
-                            watch_config.recursive = value.parse().unwrap()
-                        }
+                        Some(("recursive", value)) => config.recursive = value.parse().unwrap(),
                         _ => continue,
                     },
                 }
@@ -93,13 +98,22 @@ impl HandlerConfig {
                 continue;
             };
 
-            let watch = (path.to_string(), mask, command.to_string(), watch_config);
-            match handler.add_watch(watch.clone(), None) {
-                Err(_) => handler.failed_watches.insert(watch.clone()),
+            let mut watch = Watch {
+                path: PathBuf::from(path),
+                mask,
+                command: command.to_string(),
+                config,
+            };
+
+            match handler.add_watch(watch.clone(), true, None) {
+                Err(_) => {
+                    watch.config.table_watch = true;
+                    handler.failed_watches.insert(watch.clone())
+                }
                 _ => true,
             };
 
-            if watch_config.recursive {
+            if config.recursive {
                 handler.recursive_add_watch(watch);
             }
         }

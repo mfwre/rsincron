@@ -12,7 +12,7 @@ use figment::{
     Figment,
 };
 use futures::TryStreamExt;
-use inotify::Event;
+use inotify::{Event, EventMask};
 use log::{debug, info};
 use rsincronlib::{
     handler::{FailedWatches, Handler},
@@ -76,21 +76,27 @@ async fn process_event<'a>(
         return;
     };
 
-    let (path, mask, command, watch_config) =
-        handler.active_watches.get(&event.wd).unwrap().clone();
+    let watch = handler.active_watches.get(&event.wd).unwrap().clone();
+
+    if event.mask == EventMask::IGNORED {
+        if let Some(watch) = handler.active_watches.remove(&event.wd) {
+            handler.failed_watches.insert(watch.clone());
+            debug!(
+                "event mask IGNORED ({:?}): removed watch on {}",
+                watch.config,
+                watch.path.to_string_lossy()
+            );
+        }
+        return;
+    }
 
     let filename = match event.name {
         Some(string) => string.to_str().unwrap_or_default().to_owned(),
         _ => String::default(),
     };
 
-    if watch_config.recursive {
-        handler.recursive_add_watch((
-            path.to_owned(),
-            mask.to_owned(),
-            command.clone(),
-            watch_config,
-        ));
+    if watch.config.recursive {
+        handler.recursive_add_watch(watch.clone());
     }
 
     let masks = format!("{:?}", event.mask)
@@ -99,11 +105,14 @@ async fn process_event<'a>(
         .collect::<Vec<String>>()
         .join(",");
 
-    info!("watch event: {masks} for {path} {filename}");
+    info!(
+        "watch event: {masks} for {path} {filename}",
+        path = watch.path.to_string_lossy()
+    );
     let command = expand_variables(
-        &command,
+        &watch.command,
         &filename,
-        &path.to_string(),
+        &watch.path.to_string_lossy(),
         &masks,
         &event.mask.bits().to_string(),
     );
@@ -124,13 +133,13 @@ async fn main() {
         .dispatch_log()
         .expect("failed to set up logging: exiting");
 
-    let poll_time = config.recursive_watch_poll_time;
+    let poll_time = config.poll_time;
     let handler = Arc::new(RwLock::new(config.setup().unwrap()));
     {
         let handler = handler.clone();
         thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(poll_time));
-            debug!("watch health check");
+            thread::sleep(Duration::from_millis(poll_time));
+            debug!("loop: failed watches");
 
             let Ok(mut lock) = handler.write() else {
                 continue;
@@ -140,7 +149,13 @@ async fn main() {
                 .failed_watches
                 .clone()
                 .drain()
-                .filter(|watch| lock.add_watch(watch.clone(), None).is_err())
+                .filter(|watch| {
+                    if watch.config.table_watch {
+                        lock.add_watch(watch.clone(), true, None).is_err()
+                    } else {
+                        false
+                    }
+                })
                 .collect::<FailedWatches>();
         });
     }
@@ -149,7 +164,6 @@ async fn main() {
     let mut event_stream = handler.write().unwrap().get_event_stream();
     while let Ok(event) = event_stream.try_next().await {
         let lock = handler.write();
-
         process_event(lock.unwrap(), event).await;
     }
 }
