@@ -1,12 +1,37 @@
-use std::{ffi::OsString, process::Command, time::Duration};
-
-use async_std::{
+use std::{
+    ffi::OsString,
+    process::Command,
     sync::{Arc, RwLock, RwLockWriteGuard},
-    task,
+    thread,
+    time::Duration,
+};
+
+use clap::Parser;
+use figment::{
+    providers::{Format, Toml},
+    Figment,
 };
 use futures::TryStreamExt;
 use inotify::Event;
-use rsincronlib::handler::Handler;
+use log::{debug, info};
+use rsincronlib::{
+    handler::{FailedWatches, Handler},
+    handler_config::HandlerConfig,
+};
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(
+        short,
+        long,
+        default_value_t = format!(
+            "{}/.config/rsincron.toml",
+            std::env::var("HOME")
+                .expect("HOME envvar is not set: exiting")))
+    ]
+    config: String,
+}
 
 fn expand_variables(
     input: &str,
@@ -60,15 +85,12 @@ async fn process_event<'a>(
     };
 
     if watch_config.recursive {
-        handler.add_watch(
-            (
-                path.to_owned(),
-                mask.to_owned(),
-                command.clone(),
-                watch_config,
-            ),
-            Some(filename.clone()),
-        );
+        handler.recursive_add_watch((
+            path.to_owned(),
+            mask.to_owned(),
+            command.clone(),
+            watch_config,
+        ));
     }
 
     let masks = format!("{:?}", event.mask)
@@ -77,7 +99,7 @@ async fn process_event<'a>(
         .collect::<Vec<String>>()
         .join(",");
 
-    println!("watch event: {masks} for {path} {filename}");
+    info!("watch event: {masks} for {path} {filename}");
     let command = expand_variables(
         &command,
         &filename,
@@ -91,27 +113,43 @@ async fn process_event<'a>(
 
 #[async_std::main]
 async fn main() {
-    let handler = Arc::new(RwLock::new(
-        Handler::setup(Handler::new().unwrap()).unwrap(),
-    ));
+    let args = Args::parse();
 
-    /* TODO: implement this with recursive_add_watch if set
+    let config: HandlerConfig = Figment::new()
+        .join(Toml::file(args.config))
+        .extract()
+        .unwrap();
+
+    config
+        .dispatch_log()
+        .expect("failed to set up logging: exiting");
+
+    let poll_time = config.recursive_watch_poll_time;
+    let handler = Arc::new(RwLock::new(config.setup().unwrap()));
     {
         let handler = handler.clone();
-        task::spawn(async move {
-            loop {
-                let settings = &handler.read().await.handler_settings;
-                task::sleep(Duration::from_secs(settings.recursive_watch_poll_time)).await;
-            }
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(poll_time));
+            debug!("watch health check");
+
+            let Ok(mut lock) = handler.write() else {
+                continue;
+            };
+
+            lock.failed_watches = lock
+                .failed_watches
+                .clone()
+                .drain()
+                .filter(|watch| lock.add_watch(watch.clone(), None).is_err())
+                .collect::<FailedWatches>();
         });
     }
-    */
 
-    let mut event_stream = handler.write().await.get_event_stream();
+    // TODO: evaluate these two .unwrap() calls
+    let mut event_stream = handler.write().unwrap().get_event_stream();
     while let Ok(event) = event_stream.try_next().await {
-        let handler = handler.clone();
         let lock = handler.write();
 
-        process_event(lock.await, event).await;
+        process_event(lock.unwrap(), event).await;
     }
 }
