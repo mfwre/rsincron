@@ -36,7 +36,7 @@ pub type FailedWatches = HashSet<Watch>;
 
 pub enum AddWatchError {
     PathToStr,
-    FolderDoesntExit,
+    FolderDoesntExit(Watch),
 }
 
 pub struct Handler {
@@ -67,15 +67,13 @@ impl Handler {
             return Err(AddWatchError::PathToStr)
         };
 
-        if !from_setup {
-            watch.config.table_watch = false;
-        }
+        watch.config.table_watch = from_setup;
 
         info!("watch setup: {} for masks {:?}", path, watch.mask);
         let Ok(descriptor) = self.inotify.add_watch(&path.to_string(), watch.mask) else {
             self.failed_watches.insert(watch.clone());
             warn!("watch setup failed: {} for masks {:?}", path, watch.mask);
-            return Err(AddWatchError::FolderDoesntExit)
+            return Err(AddWatchError::FolderDoesntExit(watch))
         };
 
         self.active_watches.entry(descriptor).or_insert(watch);
@@ -105,8 +103,8 @@ impl Handler {
                 ..watch.clone()
             };
 
-            match self.add_watch(watch.clone(), false, None) {
-                Err(_) => self.failed_watches.insert(watch),
+            match self.add_watch(watch, false, None) {
+                Err(AddWatchError::FolderDoesntExit(watch)) => self.failed_watches.insert(watch),
                 _ => true,
             };
         }

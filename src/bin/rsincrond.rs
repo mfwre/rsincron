@@ -82,8 +82,8 @@ async fn process_event<'a>(
         if let Some(watch) = handler.active_watches.remove(&event.wd) {
             handler.failed_watches.insert(watch.clone());
             debug!(
-                "event mask IGNORED ({:?}): removed watch on {}",
-                watch.config,
+                "event mask IGNORED (starting watch: {:?}): removed watch on {}",
+                watch.config.table_watch,
                 watch.path.to_string_lossy()
             );
         }
