@@ -21,12 +21,10 @@ It has the same format readable under `EXAMPLE` section in `man incrontab.5`.
 ```
 
 Keep following in mind:
-- if the path doesn't exist before running `rsincrond` the line gets skipped
-  (it's on the *TODO* list)
 - you can specify how many event masks you want separated by a single comma (`,`). **Do not use whitespace**.
 - flags (such as the only one implemented `recursive=true`) have to be added,
   comma separated, together with the masks
-- the rest gets parse as the `COMMAND` to be run as `bash -c "$COMMAND"`
+- the rest gets parsed as the `COMMAND` to be run as `bash -c "$COMMAND"`
 
 #### `rsincrontab` expansion
 Following character combinations get expanded before being run:
@@ -46,13 +44,13 @@ Run ```cargo install rsincron```.
 - [ ] `rsincrontab`: `incrontab`'s sibling
 	- [ ] add flags for
 		- [x] *recursion* 
-		- [ ]*dotdirs*
+		- [ ] *dotdirs*
 	- [ ] add more verbose output
 
 - [ ] `rsincrond`: the daemon itself
-	- [ ] instantiate logging (somewhere has to be written which watches are
+	- [x] instantiate logging (somewhere has to be written which watches are
 	  working and which aren't)
-	- [ ] build some sort of *same flag* watch if a directory is made inside a 
+	- [x] build some sort of *same flag* watch if a directory is made inside a 
 	  watched one (with recursion **on**)
 
 - [ ] write every single type of test
@@ -61,9 +59,13 @@ Run ```cargo install rsincron```.
 
 ### Currently working on
 Some sort of runtime checks:
-- [ ] loop (with configurable) polling time checks for missed
-  folders, if recursion is on, and adds them to the active watches
-- [ ] general, configurable, logging (now it's very minimal to stdin/stderr)
+- [x] loop checks for missed folders, if recursion is on, and adds them to the
+  active watches
+- [x] general, configurable, logging (now it's very minimal to stdin/stderr)
+- [ ] loop checks for removed folders (if active watch is now looking nowhere
+  move it to FailedWatches)
+- [ ] better debug and info logging
+
 
 ## About
 This is a **very not ready** piece of software. Be ready for things not working
@@ -83,4 +85,4 @@ proof-of-concept at the moment.
 - [ ] daemon ignores events if watched folder is deleted and recreated while
   running
 - [x] no recursion is available at the moment
-- [ ] if started and watched folder isn't available daemon skips watch
+- [x] if started and watched folder isn't available daemon skips watch

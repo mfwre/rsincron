@@ -1,8 +1,14 @@
 use clap::Parser;
-use rsincronlib::events::EVENT_TYPES;
+use figment::{
+    providers::{Format, Toml},
+    Figment,
+};
+use log::{error, info};
+use rsincronlib::{events::EVENT_TYPES, handler_config::HandlerConfig};
 use std::{
     collections::HashMap,
     fs::{self, read_to_string, DirBuilder, File},
+    io::{self, Write},
     path::Path,
     process::Command,
 };
@@ -24,6 +30,16 @@ struct Args {
 
     #[clap(short, long)]
     remove: bool,
+
+    #[arg(
+        short,
+        long,
+        default_value_t = format!(
+            "{}/.config/rsincron.toml",
+            std::env::var("HOME")
+                .expect("HOME envvar is not set: exiting")))
+    ]
+    config: String,
 }
 
 #[derive(Debug)]
@@ -95,22 +111,28 @@ fn parse_line(line: String) -> Result<String, ParseError> {
 fn main() {
     let args = Args::parse();
     let editor = std::env::var("EDITOR").unwrap_or(String::from("/usr/bin/vi"));
-    let user = std::env::var("USER").expect("USER is not set: exiting");
-    let rsincron_dir = rsincronlib::get_user_table_path();
-    let table_path = rsincron_dir.join(user);
+
+    let config: HandlerConfig = Figment::new()
+        .join(Toml::file(args.config))
+        .extract()
+        .unwrap();
+
+    config
+        .dispatch_log()
+        .expect("failed to set up logging: exiting");
 
     if args.edit {
         DirBuilder::new()
             .recursive(true)
-            .create(&rsincron_dir)
+            .create(&config.home_directory)
             .expect(&format!(
                 "failed to create {} folder: exiting",
-                rsincron_dir.to_string_lossy()
+                config.home_directory.to_string_lossy()
             ));
 
         let tmpfile_path = std::env::temp_dir().join(Uuid::new_v4().to_string());
-        if Path::new(&table_path).exists() {
-            fs::copy(&table_path, &tmpfile_path).expect("failed to open tmp file: exiting");
+        if Path::new(&config.watch_table).exists() {
+            fs::copy(&config.watch_table, &tmpfile_path).expect("failed to open tmp file: exiting");
         } else {
             File::create(&tmpfile_path).expect("couldn't open tmp file for writing: exiting");
         };
@@ -124,25 +146,29 @@ fn main() {
         for line in read_to_string(tmpfile_path).unwrap_or_default().lines() {
             match parse_line(line.to_string().clone()) {
                 Ok(line) => buf.push_str(&line),
-                Err(err) => eprintln!("{err:?}"),
+                Err(err) => error!("{err:?}"),
             }
         }
 
-        fs::write(&table_path, buf).expect(&format!(
+        fs::write(&config.watch_table, buf).expect(&format!(
             "failed to write to {}: exiting",
-            table_path.to_string_lossy()
+            config.watch_table.to_string_lossy()
         ));
     }
 
     if args.list {
-        println!("{}", read_to_string(&table_path).unwrap_or_default());
+        let _ = io::stdout().write_all(
+            read_to_string(&config.watch_table)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
     }
 
     if args.remove {
-        fs::remove_file(&table_path).expect(&format!(
+        fs::remove_file(&config.watch_table).expect(&format!(
             "failed to delete {}: exiting",
-            table_path.to_string_lossy()
+            config.watch_table.to_string_lossy()
         ));
-        println!("user table cleared");
+        info!("user table cleared");
     }
 }

@@ -1,0 +1,7 @@
+[general]
+recursive_watch_poll_time = 1
+
+[logging]
+file = "/var/log/rsincrond.log"
+stdout = true
+level = "debug"
