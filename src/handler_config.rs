@@ -98,7 +98,7 @@ impl HandlerConfig {
                 continue;
             };
 
-            let mut watch = Watch {
+            let watch = Watch {
                 path: PathBuf::from(path),
                 mask,
                 command: command.to_string(),
