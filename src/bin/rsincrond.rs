@@ -95,7 +95,7 @@ async fn process_event<'a>(
         _ => String::default(),
     };
 
-    if watch.config.recursive {
+    if watch.config.recursive && event.mask.contains(EventMask::ISDIR) {
         handler.recursive_add_watch(watch.clone());
     }
 

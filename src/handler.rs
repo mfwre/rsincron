@@ -95,8 +95,8 @@ impl Handler {
             .filter_entry(|e| e.file_type().is_dir())
         {
             let Ok(entry) = entry else {
-                        continue;
-                    };
+                continue;
+            };
 
             let watch = Watch {
                 path: entry.path().to_path_buf(),
