@@ -29,18 +29,18 @@ treated as comment.
 ##### MASKS (paragraph courtesy of `man incrontab.5`)
 A file/folder can be watched for following events (specify them **comma**
 separated only; **no** spaces or tabs )
-- `\* IN_ACCESS`; File was accessed (read) 
-- `\* IN_ATTRIB`; Metadata changed (permissions, timestamps, attributes, etc..)
-- `\* IN_CLOSE_WRITE`; File opened for writing was closed 
-- `\* IN_CLOSE_NOWRITE`; File not opened for writing was closed 
-- `\* IN_CREATE`; File/directory created in watched directory 
-- `\* IN_DELETE`; File/directory deleted from watched directory 
+- `* IN_ACCESS`; File was accessed (read) 
+- `* IN_ATTRIB`; Metadata changed (permissions, timestamps, attributes, etc..)
+- `* IN_CLOSE_WRITE`; File opened for writing was closed 
+- `* IN_CLOSE_NOWRITE`; File not opened for writing was closed 
+- `* IN_CREATE`; File/directory created in watched directory 
+- `* IN_DELETE`; File/directory deleted from watched directory 
 - `IN_DELETE_SELF`; Watched file/directory was itself deleted
-- `\* IN_MODIFY`; File was modified 
+- `* IN_MODIFY`; File was modified 
 - `IN_MOVE_SELF`; Watched file/directory was itself moved
-- `\* IN_MOVED_FROM`; File moved out of watched directory 
-- `\* IN_MOVED_TO`; File moved into watched directory 
-- `\* IN_OPEN`; File was opened 
+- `* IN_MOVED_FROM`; File moved out of watched directory 
+- `* IN_MOVED_TO`; File moved into watched directory 
+- `* IN_OPEN`; File was opened 
 
 events marked with an asterisk trigger, when watching a folder, for files in
 the watched category.
@@ -52,7 +52,7 @@ Specify them **together** with the masks, also *comma* separated only
 
 ##### ARGS
 You can use following placeholders to pass information regarding the event to
-the suppliend command:
+the supplied command:
 - `$$` -> single `$`
 - `$@` -> path being watched
 - `$#` -> filename that triggered the event; '' if event is triggered by
