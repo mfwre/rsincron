@@ -146,6 +146,7 @@ fn main() {
             "failed to write to {}: exiting",
             config.watch_table.to_string_lossy()
         ));
+        info!("user table saved");
     }
 
     if args.list {

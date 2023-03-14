@@ -1,33 +1,58 @@
 # rsincron
 ![crates.io](https://img.shields.io/crates/v/rsincron.svg)
 
-## Description
-`rsincron` aims to be a drop-in replacement of the, it seems, abandoned
-`incron` projected. 
+An attempt to resurrect `incron` but in rust.
 
-You'll get two executables:
-1. `rsincrontab`: **use** this to manage your table
-2. `rsincrond`: the daemon itself. It isn't a daemon at the moment and I don't
-   think I'll turn it into one. Use your favourite init system to manage it.
+## Installation
+### Cargo
+Run ```cargo install rsincron```.
 
-### Usage
-**Please use** `rsincrontab -e` to edit your *rsincron*'s table. It discards
-invalid lines, while giving error feedback and keeps it formatted correctly.
 
-#### `rsincrontab` format
-It has the same format readable under `EXAMPLE` section in `man incrontab.5`.
+## Usage
+### `rsincrontab`
+Tool to manage your watches. Usage:
+```bash
+rsincrontab <mode>
 ```
-<path> <event_masks> <command to run>
+where mode is one of `edit`, `list` or `remove`.
+
+#### edit
+Opens a temp file with your `$EDITOR` (if not found defaults to `/usr/bin/vi`)
+to edit/add new rsincrons. The format used is:
 ```
+<path-to-folder-or-file>  <MASKS,ATTRS>  <command-to-execute ARGS>
+```
+you can use either spaces or tabs to separate the fields. The supplied command
+command gets run with `bash -c "$COMMAND"`. Lines starting with a `#` get
+treated as comment.
 
-Keep following in mind:
-- you can specify how many event masks you want separated by a single comma (`,`). **Do not use whitespace**.
-- flags (such as the only one implemented `recursive=true`) have to be added,
-  comma separated, together with the masks
-- the rest gets parsed as the `COMMAND` to be run as `bash -c "$COMMAND"`
+##### MASKS (paragraph courtesy of `man incrontab.5`)
+A file/folder can be watched for following events (specify them **comma**
+separated only; **no** spaces or tabs )
+- `\* IN_ACCESS`; File was accessed (read) 
+- `\* IN_ATTRIB`; Metadata changed (permissions, timestamps, attributes, etc..)
+- `\* IN_CLOSE_WRITE`; File opened for writing was closed 
+- `\* IN_CLOSE_NOWRITE`; File not opened for writing was closed 
+- `\* IN_CREATE`; File/directory created in watched directory 
+- `\* IN_DELETE`; File/directory deleted from watched directory 
+- `IN_DELETE_SELF`; Watched file/directory was itself deleted
+- `\* IN_MODIFY`; File was modified 
+- `IN_MOVE_SELF`; Watched file/directory was itself moved
+- `\* IN_MOVED_FROM`; File moved out of watched directory 
+- `\* IN_MOVED_TO`; File moved into watched directory 
+- `\* IN_OPEN`; File was opened 
 
-#### `rsincrontab` expansion
-Following character combinations get expanded before being run:
+events marked with an asterisk trigger, when watching a folder, for files in
+the watched category.
+
+##### ATTRS
+Specify them **together** with the masks, also *comma* separated only
+- `recursive=true`; whether to recursively add watches in subdirectory or keep
+  only the root one
+
+##### ARGS
+You can use following placeholders to pass information regarding the event to
+the suppliend command:
 - `$$` -> single `$`
 - `$@` -> path being watched
 - `$#` -> filename that triggered the event; '' if event is triggered by
@@ -35,8 +60,21 @@ Following character combinations get expanded before being run:
 - `$%` -> triggered event masks as text
 - `$&` -> triggered event masks as bits
 
-#### Configuration
-`rsincrond` and `rsincrontab` look for a configuration file located under
+#### list
+Lists only lines parsed lines without errors. A logfile, per default
+`/var/log/rsincron.log` will contain details about incorrect input supplied.
+
+#### remove
+Deletes user's `rsincron.table` (per default
+`$HOME/.local/share/rsincron.table`).
+
+
+### `rsincrond`
+Simply run `rsincrond`. The program doesn't background itself.
+
+
+## Configuration
+Both `rsincrond` and `rsincrontab` look for a configuration file located under
 `$HOME/.config/rsincron.toml`.
 ```toml
 # Missing values from a config file default to the following
@@ -49,25 +87,25 @@ stdout = true # if logging has to go also to standart output
 level = "warn" # loglevel <debug|info|warn|error>
 ```
 
-
-## Installation
-### Cargo
-Run ```cargo install rsincron```.
+### health loop
+Every `poll_time ms` the program checks in `recursive=true` watched folders for
+contained folders not having the same watch on. Adds to the active watches any
+inactive folders found.
 
 ## Roadmap
 - [ ] `rsincrontab`: `incrontab`'s sibling
-	- [ ] add flags for
-		- [x] *recursion* 
-		- [ ] *dotdirs*
-	- [ ] add more verbose output
+    - [ ] add flags for
+        - [x] *recursion* 
+        - [ ] *dotdirs*
+    - [ ] add more verbose output
 
 - [ ] `rsincrond`: the daemon itself
-	- [x] instantiate logging (somewhere has to be written which watches are
-	  working and which aren't)
-	- [x] build some sort of *same flag* watch if a directory is made inside a 
-	  watched one (with recursion **on**)
-	  - [ ] add more flags:
-	  	- [ ] reload table (maybe from `rsincrontab`)
+    - [x] instantiate logging (somewhere has to be written which watches are
+      working and which aren't)
+    - [x] build some sort of *same flag* watch if a directory is made inside a 
+      watched one (with recursion **on**)
+      - [ ] add more flags:
+        - [ ] reload table (maybe from `rsincrontab`)
 
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
