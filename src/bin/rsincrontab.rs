@@ -152,6 +152,7 @@ fn main() {
                     .unwrap_or_default()
                     .as_bytes(),
             );
+            info!("user table saved");
         }
 
         Mode::Remove => {
