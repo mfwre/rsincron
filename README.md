@@ -110,7 +110,7 @@ inactive folders found.
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
 - [ ] write documentation
-- [ ] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
+- [ ] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) (perhaps using [this](https://docs.rs/xdg/latest/xdg/index.html)?)
 
 ### Currently working on
 Some sort of runtime checks:
