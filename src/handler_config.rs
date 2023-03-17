@@ -24,7 +24,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             file: PathBuf::from("/var/log/rsincron.log"),
-            stdout: true,
+            stdout: false,
             level: log::LevelFilter::Warn,
         }
     }
