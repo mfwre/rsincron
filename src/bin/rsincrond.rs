@@ -13,11 +13,18 @@ use figment::{
 };
 use futures::TryStreamExt;
 use inotify::{Event, EventMask};
+use lazy_static::lazy_static;
 use log::{debug, info};
 use rsincronlib::{
     handler::{FailedWatches, Handler},
     handler_config::HandlerConfig,
 };
+use xdg::BaseDirectories;
+
+lazy_static! {
+    static ref XDG: BaseDirectories =
+        BaseDirectories::new().expect("failed to get XDG env vars: are they set?");
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -25,11 +32,12 @@ struct Args {
     #[arg(
         short,
         long,
-        default_value_t = format!(
-            "{}/.config/rsincron.toml",
-            std::env::var("HOME")
-                .expect("HOME envvar is not set: exiting")))
-    ]
+        default_value_t = XDG
+            .place_config_file("rsincron.toml")
+            .expect("failed to get `config.toml`: do I have permissions?")
+            .to_string_lossy()
+            .to_string()
+        )]
     config: String,
 }
 

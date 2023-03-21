@@ -118,7 +118,7 @@ Some sort of runtime checks:
   active watches
 - [x] general, configurable, logging (now it's very minimal to stdin/stderr)
 - [x] loop checks for removed folders 
-- [ ] XDG implementation: missing `rsincrond`, `handler_config`
+- [x] XDG implementation: missing `rsincrond`, `handler_config`
 - [ ] better debug and info logging
 
 

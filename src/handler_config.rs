@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     error, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use inotify::{Inotify, WatchMask};
@@ -11,6 +11,13 @@ use crate::{
     events::EVENT_TYPES,
     handler::{AddWatchError, Handler, Watch, WatchConfig},
 };
+use lazy_static::lazy_static;
+use xdg::BaseDirectories;
+
+lazy_static! {
+    static ref XDG: BaseDirectories =
+        BaseDirectories::new().expect("failed to get XDG env vars: are they set?");
+}
 
 #[derive(Deserialize, Clone)]
 #[serde(default)]
@@ -33,8 +40,6 @@ impl Default for LoggingConfig {
 #[derive(Deserialize, Clone)]
 #[serde(default)]
 pub struct HandlerConfig {
-    pub current_user: String,
-    pub home_directory: PathBuf,
     pub watch_table: PathBuf,
     pub poll_time: u64,
     pub logging: LoggingConfig,
@@ -42,15 +47,10 @@ pub struct HandlerConfig {
 
 impl Default for HandlerConfig {
     fn default() -> Self {
-        let current_user = std::env::var("USER").expect("USER envvar is not set: exiting");
-        let home_directory = std::env::var("HOME")
-            .map(|home| PathBuf::from(home))
-            .expect("HOME envvar is not set: exiting");
-
         Self {
-            current_user,
-            home_directory: home_directory.clone(),
-            watch_table: home_directory.join(".local/share/rsincron.table"),
+            watch_table: XDG
+                .place_data_file(Path::new("rsincron.table"))
+                .expect("failed to create `rsincron.table`: is XDG_DATA_HOME set?"),
             poll_time: 1000,
             logging: LoggingConfig::default(),
         }
