@@ -3,23 +3,14 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use lazy_static::lazy_static;
-use log::{error, info};
-use rsincronlib::{events::EVENT_TYPES, handler_config::HandlerConfig};
+use rsincronlib::{config::Config, watch::Watch, XDG};
 use std::{
-    collections::HashMap,
-    fs::{self, read_to_string, File},
+    fs::{self, File},
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
 };
 use uuid::Uuid;
-use xdg::BaseDirectories;
-
-lazy_static! {
-    static ref XDG: BaseDirectories =
-        BaseDirectories::new().expect("failed to get XDG env vars: are they set?");
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum Mode {
@@ -37,99 +28,29 @@ struct Args {
     #[arg(
         short,
         long,
-        default_value_t = XDG
+        default_value = XDG
             .place_config_file("rsincron.toml")
             .expect("failed to get `config.toml`: do I have permissions?")
-            .to_string_lossy()
-            .to_string()
+            .into_os_string()
         )]
-    config: String,
-}
-
-#[derive(Debug)]
-enum ParseError {
-    InvalidMask { _mask: String },
-    InvalidFlag { _flag: String, _value: String },
-    UnknownFlag { _flag: String },
-    FieldMissing { _field: String },
-}
-
-fn parse_line(line: String) -> Result<String, ParseError> {
-    if line.chars().nth(0) == Some('#') {
-        return Ok(format!("{line}\n"));
-    };
-
-    let mut fields = line.split_whitespace();
-    // TODO: do better error logging here
-    let path = fields.next().ok_or(ParseError::FieldMissing {
-        _field: String::from("path"),
-    })?;
-    let masks = fields.next().ok_or(ParseError::FieldMissing {
-        _field: String::from("mask"),
-    })?;
-
-    let command = fields
-        .map(|m| m.to_string())
-        .collect::<Vec<String>>()
-        .join(" ");
-
-    let types = HashMap::from(EVENT_TYPES);
-    let mut valid_masks = Vec::new();
-    for m in masks.split(',') {
-        if types.get(m).is_some() {
-            valid_masks.push(m);
-            continue;
-        } else if m.contains('=') {
-            match m.split_once('=') {
-                Some(("recursive", value)) => {
-                    value.parse::<bool>().map_err(|_| ParseError::InvalidFlag {
-                        _flag: String::from("recursive"),
-                        _value: value.to_string(),
-                    })?;
-
-                    valid_masks.push(m);
-                    continue;
-                }
-                Some((flag, _)) => {
-                    return Err(ParseError::UnknownFlag {
-                        _flag: flag.to_string(),
-                    })
-                }
-                _ => (),
-            }
-        }
-
-        return Err(ParseError::InvalidMask {
-            _mask: m.to_string(),
-        });
-    }
-
-    Ok(format!(
-        "{}\t{}\t{}\n",
-        path,
-        valid_masks.join(","),
-        command
-    ))
+    config: PathBuf,
 }
 
 fn main() {
     let args = Args::parse();
     let editor = std::env::var("EDITOR").unwrap_or(String::from("/usr/bin/vi"));
 
-    let config: HandlerConfig = Figment::new()
+    let config: Config = Figment::new()
         .join(Toml::file(args.config))
         .extract()
         .unwrap();
-
-    config
-        .dispatch_log()
-        .expect("failed to set up logging: exiting");
+    //.expect(&format!("couldn't parse `{}` file", args.config));
 
     match args.mode {
         Mode::Edit => {
             let tmpfile_path = std::env::temp_dir().join(Uuid::new_v4().to_string());
-            if Path::new(&config.watch_table).exists() {
-                fs::copy(&config.watch_table, &tmpfile_path)
+            if Path::new(&config.watch_table_file).exists() {
+                fs::copy(&config.watch_table_file, &tmpfile_path)
                     .expect("failed to open tmp file: exiting");
             } else {
                 File::create(&tmpfile_path).expect("couldn't open tmp file for writing: exiting");
@@ -141,34 +62,32 @@ fn main() {
                 .expect(&format!("failed to open EDITOR ({editor})"));
 
             let mut buf = String::new();
-            for line in read_to_string(tmpfile_path).unwrap_or_default().lines() {
-                match parse_line(line.to_string().clone()) {
-                    Ok(line) => buf.push_str(&line),
-                    Err(err) => error!("{err:?}"),
-                }
+            for line in fs::read_to_string(tmpfile_path).unwrap_or_default().lines() {
+                match Watch::try_from_str(line) {
+                    Ok(_) => buf.push_str(&line),
+                    _ => continue,
+                };
             }
 
-            fs::write(&config.watch_table, buf).expect(&format!(
+            fs::write(&config.watch_table_file, buf).expect(&format!(
                 "failed to write to {}: exiting",
-                config.watch_table.to_string_lossy()
+                config.watch_table_file.to_string_lossy()
             ));
-            info!("user table saved");
         }
 
         Mode::List => {
             let _ = io::stdout().write_all(
-                read_to_string(&config.watch_table)
+                fs::read_to_string(&config.watch_table_file)
                     .unwrap_or_default()
                     .as_bytes(),
             );
         }
 
         Mode::Remove => {
-            fs::remove_file(&config.watch_table).expect(&format!(
+            fs::remove_file(&config.watch_table_file).expect(&format!(
                 "failed to delete {}: exiting",
-                config.watch_table.to_string_lossy()
+                config.watch_table_file.to_string_lossy()
             ));
-            info!("user table cleared");
         }
     }
 }
