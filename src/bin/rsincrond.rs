@@ -1,30 +1,11 @@
-use std::{
-    ffi::OsString,
-    process::Command,
-    sync::{Arc, RwLock, RwLockWriteGuard},
-    thread,
-    time::Duration,
-};
-
 use clap::Parser;
 use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use futures::TryStreamExt;
-use inotify::{Event, EventMask};
-use lazy_static::lazy_static;
-use log::{debug, info};
-use rsincronlib::{
-    handler::{FailedWatches, Handler},
-    handler_config::HandlerConfig,
-};
-use xdg::BaseDirectories;
-
-lazy_static! {
-    static ref XDG: BaseDirectories =
-        BaseDirectories::new().expect("failed to get XDG env vars: are they set?");
-}
+use inotify::{Inotify, WatchDescriptor};
+use rsincronlib::{config::Config, watch::WatchData, XDG};
+use std::{collections::HashMap, process};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -41,45 +22,8 @@ struct Args {
     config: String,
 }
 
-fn expand_variables(
-    input: &str,
-    filename: &str,
-    path: &str,
-    mask_text: &str,
-    mask_bits: &str,
-) -> String {
-    let mut formatted = String::new();
-    let mut dollar = false;
-    for c in input.chars() {
-        if c == '$' {
-            if !dollar {
-                dollar = true;
-            } else {
-                formatted.push(c);
-                dollar = false;
-            }
-        } else {
-            if dollar {
-                match c {
-                    '#' => formatted.push_str(filename),
-                    '@' => formatted.push_str(path),
-                    '%' => formatted.push_str(mask_text),
-                    '&' => formatted.push_str(mask_bits),
-                    _ => formatted.push(c),
-                }
-                dollar = false;
-            } else {
-                formatted.push(c);
-            }
-        }
-    }
-    formatted
-}
-
-async fn process_event<'a>(
-    mut handler: RwLockWriteGuard<'a, Handler>,
-    event: Option<Event<OsString>>,
-) {
+/*
+fn process_event<'a>(mut handler: RwLockWriteGuard<'a, Handler>, event: Option<Event<OsString>>) {
     let Some(event) = event else {
         return;
     };
@@ -127,20 +71,68 @@ async fn process_event<'a>(
 
     let _ = Command::new("bash").arg("-c").arg(command).spawn();
 }
+*/
 
-#[async_std::main]
-async fn main() {
+fn reload_watches(
+    current_watches: Option<HashMap<WatchDescriptor, WatchData>>,
+    new_watches: Vec<WatchData>,
+    inotify: &mut Inotify,
+) -> HashMap<WatchDescriptor, WatchData> {
+    let mut watches = inotify.watches();
+    let mut new_map = HashMap::new();
+
+    for descriptor in current_watches.unwrap_or_default().into_keys() {
+        watches.remove(descriptor).unwrap()
+    }
+
+    for watch in new_watches {
+        if let Ok(descriptor) = watches.add(&watch.path, watch.mask.clone()) {
+            new_map.insert(descriptor, watch);
+        }
+    }
+
+    println!("{:#?}", new_map);
+    new_map
+}
+
+fn main() {
     let args = Args::parse();
 
-    let config: HandlerConfig = Figment::new()
+    let config: Config = Figment::new()
         .join(Toml::file(args.config))
         .extract()
         .unwrap();
 
-    config
-        .dispatch_log()
-        .expect("failed to set up logging: exiting");
+    let mut inotify = Inotify::init().expect("Error while initializing inotify instance");
+    let watches = match config.parse() {
+        Ok(watches) => watches,
+        Err(err) => {
+            eprintln!("failed to read watch table: {err}");
+            process::exit(1);
+        }
+    };
 
+    let watches = reload_watches(None, watches, &mut inotify);
+
+    let mut buffer = [0; 4096];
+
+    loop {
+        match inotify.read_events_blocking(&mut buffer) {
+            Err(_) => continue,
+            Ok(events) => {
+                for event in events {
+                    if let Some(watch) = watches.get(&event.wd) {
+                        watch
+                            .command
+                            .execute(&watch.path, event.name, event.mask, event.mask.bits())
+                            .unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    /*
     let poll_time = config.poll_time;
     let handler = Arc::new(RwLock::new(config.setup().unwrap()));
     {
@@ -167,11 +159,12 @@ async fn main() {
                 .collect::<FailedWatches>();
         });
     }
+    */
 
-    // TODO: evaluate these two .unwrap() calls
-    let mut event_stream = handler.write().unwrap().get_event_stream();
+    /*
     while let Ok(event) = event_stream.try_next().await {
         let lock = handler.write();
         process_event(lock.unwrap(), event).await;
     }
+    */
 }

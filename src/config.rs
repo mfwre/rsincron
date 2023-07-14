@@ -1,4 +1,4 @@
-use crate::{watch::Watch, XDG};
+use crate::{watch::WatchData, XDG};
 use serde::Deserialize;
 use std::{
     fs, io,
@@ -21,10 +21,10 @@ impl Default for Config {
 }
 
 impl<'a> Config {
-    pub fn parse(self) -> Result<Vec<Watch>, io::Error> {
+    pub fn parse(self) -> Result<Vec<WatchData>, io::Error> {
         let mut watches = vec![];
         for line in fs::read_to_string(self.watch_table_file)?.lines() {
-            if let Ok(watch) = Watch::try_from_str(line) {
+            if let Ok(watch) = WatchData::try_from_str(line) {
                 watches.push(watch);
             }
         }

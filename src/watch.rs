@@ -1,28 +1,78 @@
 use crate::events::EVENT_TYPES;
-use inotify::WatchMask;
-use std::{path::PathBuf, vec};
+use inotify::{EventMask, WatchMask};
+use std::{
+    ffi::OsStr,
+    io,
+    path::PathBuf,
+    process::{self, ExitStatus},
+    vec,
+};
 
-type Result<T> = std::result::Result<T, ParseWatchError>;
+type WatchResult<T> = std::result::Result<T, ParseWatchError>;
 
 pub enum ParseWatchError {
     IsComment,
     MissingArgument,
 }
 
-#[derive(Clone)]
-struct Command {
+#[derive(Clone, Debug)]
+pub struct Command {
     program: String,
     args: Vec<String>,
 }
 
-pub struct Watch {
-    path: PathBuf,
-    mask: WatchMask,
-    command: Command,
+impl Command {
+    pub fn execute(
+        &self,
+        path: &PathBuf,
+        filename: Option<&OsStr>,
+        mask_text: EventMask,
+        mask_bits: u32,
+    ) -> Result<ExitStatus, io::Error> {
+        process::Command::new(&self.program)
+            .args(self.args.iter().map(|arg| {
+                let mut formatted = String::new();
+                let mut dollar = false;
+                for c in arg.chars() {
+                    if c == '$' {
+                        if !dollar {
+                            dollar = true;
+                        } else {
+                            formatted.push(c);
+                            dollar = false;
+                        }
+                    } else {
+                        if dollar {
+                            match c {
+                                '#' => formatted.push_str(
+                                    filename.map(|s| s.to_str()).flatten().unwrap_or_default(),
+                                ),
+                                '@' => formatted.push_str(path.to_str().unwrap_or_default()),
+                                '%' => formatted.push_str(&format!("\"{:?}\"", mask_text)),
+                                '&' => formatted.push_str(&mask_bits.to_string()),
+                                _ => formatted.push(c),
+                            }
+                            dollar = false;
+                        } else {
+                            formatted.push(c);
+                        }
+                    }
+                }
+                formatted
+            }))
+            .status()
+    }
 }
 
-impl<'a> Watch {
-    pub fn try_from_str(input: &'a str) -> Result<Self> {
+#[derive(Debug)]
+pub struct WatchData {
+    pub path: PathBuf,
+    pub mask: WatchMask,
+    pub command: Command,
+}
+
+impl<'a> WatchData {
+    pub fn try_from_str(input: &'a str) -> WatchResult<Self> {
         let input = input.trim();
         if input.starts_with('#') {
             return Err(ParseWatchError::IsComment);

@@ -23,8 +23,8 @@ xdg = "2.4.1"
 [[bin]]
 name = "rsincrontab"
 
-# [[bin]]
-# name = "rsincrond"
+[[bin]]
+name = "rsincrond"
 
 [lib]
 name = "rsincronlib"

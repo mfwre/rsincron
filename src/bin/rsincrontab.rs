@@ -3,7 +3,7 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use rsincronlib::{config::Config, watch::Watch, XDG};
+use rsincronlib::{config::Config, watch::WatchData, XDG};
 use std::{
     fs::{self, File},
     io::{self, Write},
@@ -63,7 +63,7 @@ fn main() {
 
             let mut buf = String::new();
             for line in fs::read_to_string(tmpfile_path).unwrap_or_default().lines() {
-                match Watch::try_from_str(line) {
+                match WatchData::try_from_str(line) {
                     Ok(_) => buf.push_str(&line),
                     _ => continue,
                 };
