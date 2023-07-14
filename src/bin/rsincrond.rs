@@ -4,8 +4,17 @@ use figment::{
     Figment,
 };
 use inotify::{Inotify, WatchDescriptor};
-use rsincronlib::{config::Config, watch::WatchData, XDG};
-use std::{collections::HashMap, process};
+use rsincronlib::{config::Config, watch::WatchData, SOCKET, XDG};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Read,
+    os::unix::net::UnixListener,
+    path::Path,
+    process,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -61,6 +70,7 @@ fn process_event<'a>(mut handler: RwLockWriteGuard<'a, Handler>, event: Option<E
         "watch event: {masks} for {path} {filename}",
         path = watch.path.to_string_lossy()
     );
+
     let command = expand_variables(
         &watch.command,
         &filename,
@@ -74,25 +84,52 @@ fn process_event<'a>(mut handler: RwLockWriteGuard<'a, Handler>, event: Option<E
 */
 
 fn reload_watches(
-    current_watches: Option<HashMap<WatchDescriptor, WatchData>>,
+    mut current_watches: Vec<WatchDescriptor>,
     new_watches: Vec<WatchData>,
     inotify: &mut Inotify,
 ) -> HashMap<WatchDescriptor, WatchData> {
     let mut watches = inotify.watches();
     let mut new_map = HashMap::new();
 
-    for descriptor in current_watches.unwrap_or_default().into_keys() {
-        watches.remove(descriptor).unwrap()
-    }
-
     for watch in new_watches {
         if let Ok(descriptor) = watches.add(&watch.path, watch.mask.clone()) {
+            current_watches.retain(|d| descriptor != *d);
             new_map.insert(descriptor, watch);
         }
     }
 
-    println!("{:#?}", new_map);
+    for watch in current_watches {
+        watches.remove(watch).unwrap();
+    }
+
     new_map
+}
+
+fn handle_socket(update_watches: Arc<Mutex<bool>>) {
+    if Path::new(SOCKET).exists() {
+        fs::remove_file(SOCKET).expect(&format!("failed to remove `{SOCKET}`"));
+    }
+
+    let Ok(listener) = UnixListener::bind(SOCKET) else {
+        eprintln!("failed to bind to socket");
+        process::exit(1);
+    };
+
+    for stream in listener.incoming() {
+        if let Ok(mut stream) = stream {
+            let update_watches = Arc::clone(&update_watches);
+            thread::spawn(move || {
+                let mut buffer = String::new();
+                if stream.read_to_string(&mut buffer).is_err() {
+                    return;
+                }
+
+                if buffer.as_str() == "RELOAD" {
+                    *update_watches.lock().unwrap() = true;
+                }
+            });
+        }
+    }
 }
 
 fn main() {
@@ -103,23 +140,33 @@ fn main() {
         .extract()
         .unwrap();
 
-    let mut inotify = Inotify::init().expect("Error while initializing inotify instance");
-    let watches = match config.parse() {
-        Ok(watches) => watches,
-        Err(err) => {
-            eprintln!("failed to read watch table: {err}");
-            process::exit(1);
-        }
-    };
-
-    let watches = reload_watches(None, watches, &mut inotify);
+    let update_watches = Arc::new(Mutex::new(false));
+    {
+        let update_watches = Arc::clone(&update_watches);
+        thread::spawn(move || {
+            handle_socket(update_watches);
+        });
+    }
 
     let mut buffer = [0; 4096];
-
+    let mut inotify = Inotify::init().expect("Error while initializing inotify instance");
+    let mut watches = reload_watches(Vec::new(), config.parse(), &mut inotify);
     loop {
         match inotify.read_events_blocking(&mut buffer) {
             Err(_) => continue,
             Ok(events) => {
+                if let Ok(mut update) = update_watches.lock() {
+                    if *update {
+                        println!("reloading watch table");
+                        watches = reload_watches(
+                            watches.into_keys().collect(),
+                            config.parse(),
+                            &mut inotify,
+                        );
+                        *update = false;
+                    }
+                }
+
                 for event in events {
                     if let Some(watch) = watches.get(&event.wd) {
                         watch
@@ -154,17 +201,10 @@ fn main() {
                         lock.add_watch(watch.clone(), true, None).is_err()
                     } else {
                         false
-                    }
-                })
-                .collect::<FailedWatches>();
+                }
+            })
+            .collect::<FailedWatches>();
         });
-    }
-    */
-
-    /*
-    while let Ok(event) = event_stream.try_next().await {
-        let lock = handler.write();
-        process_event(lock.unwrap(), event).await;
     }
     */
 }

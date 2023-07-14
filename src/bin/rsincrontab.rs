@@ -3,12 +3,13 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use rsincronlib::{config::Config, watch::WatchData, XDG};
+use rsincronlib::{config::Config, watch::WatchData, SOCKET, XDG};
 use std::{
     fs::{self, File},
     io::{self, Write},
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::Command,
+    process::{self, Command},
 };
 use uuid::Uuid;
 
@@ -64,7 +65,7 @@ fn main() {
             let mut buf = String::new();
             for line in fs::read_to_string(tmpfile_path).unwrap_or_default().lines() {
                 match WatchData::try_from_str(line) {
-                    Ok(_) => buf.push_str(&line),
+                    Ok(_) => buf.push_str(&format!("{line}\n")),
                     _ => continue,
                 };
             }
@@ -73,6 +74,14 @@ fn main() {
                 "failed to write to {}: exiting",
                 config.watch_table_file.to_string_lossy()
             ));
+
+            if UnixStream::connect(SOCKET)
+                .map(|mut stream| stream.write_all("RELOAD".as_bytes()))
+                .is_err()
+            {
+                eprintln!("failed to bind to `/var/run/rsincrond.socket`: reload daemon manually");
+                process::exit(2);
+            }
         }
 
         Mode::List => {

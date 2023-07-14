@@ -13,3 +13,5 @@ use xdg::BaseDirectories;
 
 pub static XDG: LazyLock<BaseDirectories> =
     LazyLock::new(|| BaseDirectories::new().expect("failed to get XDG env vars: are they set?"));
+
+pub const SOCKET: &str = "/var/run/rsincron/rsincron.socket";

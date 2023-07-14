@@ -1,11 +1,12 @@
 use crate::{watch::WatchData, XDG};
 use serde::Deserialize;
 use std::{
-    fs, io,
+    fs,
     path::{Path, PathBuf},
+    process,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Config {
     pub watch_table_file: PathBuf,
 }
@@ -21,14 +22,22 @@ impl Default for Config {
 }
 
 impl<'a> Config {
-    pub fn parse(self) -> Result<Vec<WatchData>, io::Error> {
+    pub fn parse(&self) -> Vec<WatchData> {
         let mut watches = vec![];
-        for line in fs::read_to_string(self.watch_table_file)?.lines() {
+        let table_content = match fs::read_to_string(&self.watch_table_file) {
+            Ok(table_content) => table_content,
+            _ => {
+                eprintln!("failed to read `{:?}`", self.watch_table_file);
+                process::exit(1);
+            }
+        };
+
+        for line in table_content.lines() {
             if let Ok(watch) = WatchData::try_from_str(line) {
                 watches.push(watch);
             }
         }
 
-        Ok(watches)
+        watches
     }
 }

@@ -22,9 +22,8 @@ to edit/add new rsincrons. The format used is:
 ```
 <path-to-folder-or-file>  <MASKS,ATTRS>  <command-to-execute ARGS>
 ```
-you can use either spaces or tabs to separate the fields. The supplied command
-command gets run with `bash -c "$COMMAND"`. Lines starting with a `#` get
-treated as comment.
+you can use either spaces or tabs to separate the fields. Lines starting with
+a `#` get treated as comment.
 
 ##### MASKS (paragraph courtesy of `man incrontab.5`)
 A file/folder can be watched for following events (specify them **comma**
@@ -61,7 +60,7 @@ the supplied command:
 - `$&` -> triggered event masks as bits
 
 #### list
-Lists only lines parsed lines without errors. A logfile, per default
+Lists only lines parsed without errors. A logfile, per default
 `/var/log/rsincron.log` will contain details about incorrect input supplied.
 
 #### remove
@@ -79,12 +78,12 @@ Both `rsincrond` and `rsincrontab` look for a configuration file located under
 ```toml
 # Missing values from a config file default to the following
 watch_table = "$HOME/.local/share/rsincron.table"
-poll_time = 1000  # time [ms] between health loop iteractions
+# poll_time = 1000  # time [ms] between health loop iteractions
 
-[logging]
-file = "/var/log/rsincron.log" # logfile path
-stdout = true # if logging has to go also to standart output
-level = "warn" # loglevel <debug|info|warn|error>
+# [logging]
+# file = "/var/log/rsincron.log" # logfile path
+# stdout = true # if logging has to go also to standart output
+# level = "warn" # loglevel <debug|info|warn|error>
 ```
 
 ### health loop
@@ -95,17 +94,17 @@ inactive folders found.
 ## Roadmap
 - [ ] `rsincrontab`: `incrontab`'s sibling
     - [ ] add flags for
-        - [x] *recursion* 
+        - [ ] *recursion* 
         - [ ] *dotdirs*
     - [ ] add more verbose output
 
 - [ ] `rsincrond`: the daemon itself
-    - [x] instantiate logging (somewhere has to be written which watches are
+    - [ ] instantiate logging (somewhere has to be written which watches are
       working and which aren't)
-    - [x] build some sort of *same flag* watch if a directory is made inside a 
+    - [ ] build some sort of *same flag* watch if a directory is made inside a 
       watched one (with recursion **on**)
-      - [ ] add more flags:
-        - [ ] reload table (maybe from `rsincrontab`)
+    - [x] reload table (`rsincrontab edit` triggers a reload of the watch table
+      through a socket `/var/run/rsincron/rsincron.socket`)
 
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
@@ -114,11 +113,11 @@ inactive folders found.
 
 ### Currently working on
 Some sort of runtime checks:
-- [x] loop checks for missed folders, if recursion is on, and adds them to the
+- [ ] loop checks for missed folders, if recursion is on, and adds them to the
   active watches
-- [x] general, configurable, logging (now it's very minimal to stdin/stderr)
-- [x] loop checks for removed folders 
-- [x] XDG implementation: missing `rsincrond`, `handler_config`
+- [ ] general, configurable, logging (now it's very minimal to stdin/stderr)
+- [ ] loop checks for removed folders 
+- [x] XDG implementation
 - [ ] better debug and info logging
 
 
@@ -137,8 +136,8 @@ Please expect lots of bugs, `rsincron` isn't alpha yet. It looks closer to a
 proof-of-concept at the moment.
 
 ## Known issues
-- [x] daemon ignores events if watched folder is deleted and recreated while
+- [ ] daemon ignores events if watched folder is deleted and recreated while
   running
-- [x] no recursion is available at the moment
-- [x] if started and watched folder isn't available daemon skips watch
+- [ ] no recursion is available at the moment
+- [ ] if started and watched folder isn't available daemon skips watch
 - [ ] `mkdir -p watched_dir/{1,2,3}/2/3` doesn't trigger on subfolders
