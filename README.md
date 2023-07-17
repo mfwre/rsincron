@@ -94,7 +94,7 @@ inactive folders found.
 ## Roadmap
 - [ ] `rsincrontab`: `incrontab`'s sibling
     - [ ] add flags for
-        - [ ] *recursion* 
+        - [x] *recursion* 
         - [ ] *dotdirs*
     - [ ] add more verbose output
 
@@ -117,7 +117,6 @@ Some sort of runtime checks:
   active watches
 - [ ] general, configurable, logging (now it's very minimal to stdin/stderr)
 - [ ] loop checks for removed folders 
-- [x] XDG implementation
 - [ ] better debug and info logging
 
 

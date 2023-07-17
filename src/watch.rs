@@ -64,11 +64,31 @@ impl Command {
     }
 }
 
-#[derive(Debug)]
+fn parse_flag(input_str: &str, flags: &mut Flags) {
+    let Some((flag, value)) = input_str.split_once('=') else {
+        return;
+    };
+
+    let Ok(value) = value.parse::<bool>() else {
+        return;
+    };
+
+    if flag == "recursive" {
+        flags.recursive = value;
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Flags {
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct WatchData {
     pub path: PathBuf,
     pub mask: WatchMask,
     pub command: Command,
+    pub flags: Flags,
 }
 
 impl<'a> WatchData {
@@ -85,6 +105,7 @@ impl<'a> WatchData {
             args: vec![],
         };
 
+        let mut flags = Flags::default();
         for substring in input.split_whitespace() {
             if path.is_none() {
                 path = Some(PathBuf::from(substring));
@@ -96,8 +117,10 @@ impl<'a> WatchData {
 
                 for m in substring.split(',') {
                     match EVENT_TYPES.get(m) {
-                        Some(m) => mask.insert(*m),
-                        _ => continue,
+                        Some(m) => {
+                            let _ = mask.insert(*m);
+                        }
+                        _ => parse_flag(m, &mut flags),
                     };
                 }
                 continue;
@@ -115,6 +138,7 @@ impl<'a> WatchData {
                 path,
                 mask,
                 command,
+                flags,
             })
         } else {
             Err(ParseWatchError::MissingArgument)

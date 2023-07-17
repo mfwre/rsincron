@@ -3,7 +3,7 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use inotify::{Inotify, WatchDescriptor};
+use inotify::{EventMask, Inotify, WatchDescriptor};
 use rsincronlib::{config::Config, watch::WatchData, SOCKET, XDG};
 use std::{
     collections::HashMap,
@@ -15,6 +15,7 @@ use std::{
     sync::{Arc, Mutex},
     thread,
 };
+use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -32,13 +33,6 @@ struct Args {
 }
 
 /*
-fn process_event<'a>(mut handler: RwLockWriteGuard<'a, Handler>, event: Option<Event<OsString>>) {
-    let Some(event) = event else {
-        return;
-    };
-
-    let watch = handler.active_watches.get(&event.wd).unwrap().clone();
-
     if event.mask == EventMask::IGNORED {
         if let Some(watch) = handler.active_watches.remove(&event.wd) {
             handler.failed_watches.insert(watch.clone());
@@ -50,59 +44,67 @@ fn process_event<'a>(mut handler: RwLockWriteGuard<'a, Handler>, event: Option<E
         }
         return;
     }
-
-    let filename = match event.name {
-        Some(string) => string.to_str().unwrap_or_default().to_owned(),
-        _ => String::default(),
-    };
-
-    if watch.config.recursive && event.mask.contains(EventMask::ISDIR) {
-        handler.recursive_add_watch(watch.clone());
-    }
-
-    let masks = format!("{:?}", event.mask)
-        .split(" | ")
-        .map(|f| format!("IN_{f}"))
-        .collect::<Vec<String>>()
-        .join(",");
-
-    info!(
-        "watch event: {masks} for {path} {filename}",
-        path = watch.path.to_string_lossy()
-    );
-
-    let command = expand_variables(
-        &watch.command,
-        &filename,
-        &watch.path.to_string_lossy(),
-        &masks,
-        &event.mask.bits().to_string(),
-    );
-
-    let _ = Command::new("bash").arg("-c").arg(command).spawn();
-}
 */
 
+fn add_watch(
+    inotify: &mut Inotify,
+    watch: WatchData,
+    old_watches: &mut Vec<WatchDescriptor>,
+    watch_map: &mut HashMap<WatchDescriptor, WatchData>,
+) -> bool {
+    if let Ok(descriptor) = inotify.watches().add(&watch.path, watch.mask.clone()) {
+        old_watches.retain(|d| descriptor != *d);
+        watch_map.insert(descriptor, watch);
+        return true;
+    }
+
+    return false;
+}
+
 fn reload_watches(
-    mut current_watches: Vec<WatchDescriptor>,
+    mut old_watches: Vec<WatchDescriptor>,
     new_watches: Vec<WatchData>,
     inotify: &mut Inotify,
 ) -> HashMap<WatchDescriptor, WatchData> {
-    let mut watches = inotify.watches();
-    let mut new_map = HashMap::new();
+    let mut watch_map = HashMap::new();
 
     for watch in new_watches {
-        if let Ok(descriptor) = watches.add(&watch.path, watch.mask.clone()) {
-            current_watches.retain(|d| descriptor != *d);
-            new_map.insert(descriptor, watch);
+        if !add_watch(inotify, watch.clone(), &mut old_watches, &mut watch_map) {
+            continue;
+        }
+
+        if !watch.flags.recursive {
+            continue;
+        }
+
+        for entry in WalkDir::new(&watch.path).min_depth(1) {
+            let Ok(entry) = entry else {
+                continue;
+            };
+
+            let Ok(metadata) =  entry.metadata() else {
+                continue;
+            };
+
+            if !metadata.is_dir() {
+                continue;
+            }
+
+            let watch = WatchData {
+                path: watch.path.join(entry.path()),
+                ..watch.clone()
+            };
+
+            add_watch(inotify, watch, &mut old_watches, &mut watch_map);
         }
     }
 
-    for watch in current_watches {
+    let mut watches = inotify.watches();
+    for watch in old_watches {
         watches.remove(watch).unwrap();
     }
 
-    new_map
+    watch_map
 }
 
 fn handle_socket(update_watches: Arc<Mutex<bool>>) {
@@ -157,7 +159,6 @@ fn main() {
             Ok(events) => {
                 if let Ok(mut update) = update_watches.lock() {
                     if *update {
-                        println!("reloading watch table");
                         watches = reload_watches(
                             watches.into_keys().collect(),
                             config.parse(),
@@ -173,6 +174,10 @@ fn main() {
                             .command
                             .execute(&watch.path, event.name, event.mask, event.mask.bits())
                             .unwrap();
+
+                        if watch.flags.recursive && event.mask.contains(EventMask::ISDIR) {
+                            *update_watches.lock().unwrap() = true;
+                        }
                     }
                 }
             }
