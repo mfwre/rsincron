@@ -3,8 +3,9 @@ use serde::Deserialize;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process,
+    str::FromStr,
 };
+use tracing::{event, Level};
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -21,19 +22,25 @@ impl Default for Config {
     }
 }
 
-impl<'a> Config {
+impl Config {
+    #[tracing::instrument(skip_all)]
     pub fn parse(&self) -> Vec<WatchData> {
         let mut watches = vec![];
         let table_content = match fs::read_to_string(&self.watch_table_file) {
             Ok(table_content) => table_content,
             _ => {
-                eprintln!("failed to read `{:?}`", self.watch_table_file);
-                process::exit(1);
+                event!(
+                    Level::ERROR,
+                    filename = ?self.watch_table_file,
+                    "failed to read file"
+                );
+
+                panic!("failed to read watch table file");
             }
         };
 
         for line in table_content.lines() {
-            if let Ok(watch) = WatchData::try_from_str(line) {
+            if let Ok(watch) = WatchData::from_str(line) {
                 watches.push(watch);
             }
         }

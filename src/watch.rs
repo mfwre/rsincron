@@ -1,61 +1,53 @@
-use crate::events::EVENT_TYPES;
-use inotify::{EventMask, WatchMask};
 use std::{
     ffi::OsStr,
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{self, ExitStatus},
-    vec,
+    str::FromStr,
 };
 
-type WatchResult<T> = std::result::Result<T, ParseWatchError>;
+use crate::{
+    events::MaskWrapper,
+    parser::WatchOption,
+    parser::{parse_command, parse_masks, parse_path},
+};
+use inotify::{Event, WatchMask};
+use tracing::{event, Level};
+use winnow::{combinator::cut_err, Parser};
 
-pub enum ParseWatchError {
-    IsComment,
-    MissingArgument,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
-    program: String,
-    args: Vec<String>,
+    pub program: String,
+    pub argv: Vec<String>,
 }
 
 impl Command {
-    pub fn execute(
-        &self,
-        path: &PathBuf,
-        filename: Option<&OsStr>,
-        mask_text: EventMask,
-        mask_bits: u32,
-    ) -> Result<ExitStatus, io::Error> {
+    pub fn execute(&self, path: &Path, event: &Event<&OsStr>) -> Result<ExitStatus, io::Error> {
         process::Command::new(&self.program)
-            .args(self.args.iter().map(|arg| {
+            .args(self.argv.iter().map(|arg| {
                 let mut formatted = String::new();
-                let mut dollar = false;
+                let mut parsing_dollar = false;
+
                 for c in arg.chars() {
                     if c == '$' {
-                        if !dollar {
-                            dollar = true;
+                        if !parsing_dollar {
+                            parsing_dollar = true;
                         } else {
                             formatted.push(c);
-                            dollar = false;
+                            parsing_dollar = false;
                         }
+                    } else if parsing_dollar {
+                        match c {
+                            '#' => formatted
+                                .push_str(event.name.and_then(|s| s.to_str()).unwrap_or_default()),
+                            '@' => formatted.push_str(path.to_str().unwrap_or_default()),
+                            '%' => formatted.push_str(&format!("\"{:?}\"", event.mask)),
+                            '&' => formatted.push_str(&event.mask.bits().to_string()),
+                            _ => formatted.push(c),
+                        }
+                        parsing_dollar = false;
                     } else {
-                        if dollar {
-                            match c {
-                                '#' => formatted.push_str(
-                                    filename.map(|s| s.to_str()).flatten().unwrap_or_default(),
-                                ),
-                                '@' => formatted.push_str(path.to_str().unwrap_or_default()),
-                                '%' => formatted.push_str(&format!("\"{:?}\"", mask_text)),
-                                '&' => formatted.push_str(&mask_bits.to_string()),
-                                _ => formatted.push(c),
-                            }
-                            dollar = false;
-                        } else {
-                            formatted.push(c);
-                        }
+                        formatted.push(c);
                     }
                 }
                 formatted
@@ -64,84 +56,120 @@ impl Command {
     }
 }
 
-fn parse_flag(input_str: &str, flags: &mut Flags) {
-    let Some((flag, value)) = input_str.split_once('=') else {
-        return;
-    };
-
-    let Ok(value) = value.parse::<bool>() else {
-        return;
-    };
-
-    if flag == "recursive" {
-        flags.recursive = value;
-    }
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParseWatchError {
+    InvalidMask,
+    IsComment,
+    CorruptInput,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Flags {
     pub recursive: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchData {
     pub path: PathBuf,
-    pub mask: WatchMask,
+    pub masks: WatchMask,
     pub command: Command,
     pub flags: Flags,
 }
 
-impl<'a> WatchData {
-    pub fn try_from_str(input: &'a str) -> WatchResult<Self> {
-        let input = input.trim();
-        if input.starts_with('#') {
+impl FromStr for WatchData {
+    type Err = ParseWatchError;
+    #[tracing::instrument]
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.starts_with('#') {
             return Err(ParseWatchError::IsComment);
         };
 
-        let mut path = None;
-        let mut mask = None;
-        let mut command = Command {
-            program: String::new(),
-            args: vec![],
-        };
+        (
+            cut_err(parse_path),
+            cut_err(parse_masks),
+            cut_err(parse_command),
+        )
+            .map(|(path, watch_options, command)| {
+                let mut masks = WatchMask::empty();
+                let mut flags = Flags::default();
 
-        let mut flags = Flags::default();
-        for substring in input.split_whitespace() {
-            if path.is_none() {
-                path = Some(PathBuf::from(substring));
-                continue;
-            };
+                for option in watch_options {
+                    match option {
+                        WatchOption::Mask(mask) => {
+                            let mask = match mask.parse::<MaskWrapper>() {
+                                Ok(m) => m,
+                                Err(_) => {
+                                    event!(Level::ERROR, mask, "invalid mask");
+                                    return Err(ParseWatchError::InvalidMask);
+                                }
+                            };
 
-            if mask.is_none() {
-                mask = Some(WatchMask::empty());
-
-                for m in substring.split(',') {
-                    match EVENT_TYPES.get(m) {
-                        Some(m) => {
-                            let _ = mask.insert(*m);
+                            masks = masks.union(mask.0);
                         }
-                        _ => parse_flag(m, &mut flags),
-                    };
+                        WatchOption::Flag(flag, value) => match flag.as_str() {
+                            "recursive" => flags.recursive = value,
+                            _ => continue,
+                        },
+                    }
                 }
-                continue;
-            }
 
-            if command.program.is_empty() {
-                command.program.push_str(substring);
-            } else {
-                command.args.push(substring.to_string());
-            }
-        }
-
-        if let (Some(path), Some(mask)) = (path, mask) {
-            Ok(Self {
-                path,
-                mask,
-                command,
-                flags,
+                Ok(WatchData {
+                    path,
+                    command,
+                    masks,
+                    flags,
+                })
             })
-        } else {
-            Err(ParseWatchError::MissingArgument)
+            .parse(s)
+            .map_err(|error| {
+                event!(Level::ERROR, ?error);
+                ParseWatchError::CorruptInput
+            })?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use inotify::WatchMask;
+
+    use crate::watch::{Command, Flags, ParseWatchError, WatchData};
+
+    const LINE_DATA: &str = include_str!("../assets/test/test-line");
+    const DATA: &str = include_str!("../assets/test/test-table");
+
+    fn get_test_watch() -> WatchData {
+        WatchData {
+            path: PathBuf::from("/var/tmp"),
+            masks: WatchMask::CREATE | WatchMask::DELETE,
+            flags: Flags { recursive: true },
+            command: Command {
+                program: String::from("echo"),
+                argv: ["$@", "$#", "&>", "/dev/null"].map(String::from).to_vec(),
+            },
         }
+    }
+
+    #[test]
+    fn test_parse_line() {
+        assert_eq!(LINE_DATA.parse::<WatchData>().unwrap(), get_test_watch());
+    }
+
+    #[test]
+    fn test_parse_table() {
+        assert_eq!(
+            DATA.lines()
+                .map(|l| l.parse::<WatchData>())
+                .collect::<Vec<Result<WatchData, ParseWatchError>>>(),
+            vec![
+                Ok(get_test_watch()),
+                Ok(get_test_watch()),
+                Err(ParseWatchError::InvalidMask),
+                Err(ParseWatchError::IsComment),
+                Err(ParseWatchError::CorruptInput),
+            ]
+        )
     }
 }

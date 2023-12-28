@@ -4,17 +4,18 @@ use figment::{
     Figment,
 };
 use inotify::{EventMask, Inotify, WatchDescriptor};
-use rsincronlib::{config::Config, watch::WatchData, SOCKET, XDG};
+use rsincronlib::{config::Config, watch::WatchData, SocketMessage, SOCKET, XDG};
 use std::{
     collections::HashMap,
     fs,
     io::Read,
     os::unix::net::UnixListener,
-    path::Path,
-    process,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Sender},
     thread,
 };
+
+use tracing::{event, Level};
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -23,13 +24,11 @@ struct Args {
     #[arg(
         short,
         long,
-        default_value_t = XDG
+        default_value_os_t = XDG
             .place_config_file("rsincron.toml")
             .expect("failed to get `config.toml`: do I have permissions?")
-            .to_string_lossy()
-            .to_string()
         )]
-    config: String,
+    config: PathBuf,
 }
 
 /*
@@ -46,21 +45,23 @@ struct Args {
     }
 */
 
+// TODO: cont
 fn add_watch(
     inotify: &mut Inotify,
     watch: WatchData,
     old_watches: &mut Vec<WatchDescriptor>,
     watch_map: &mut HashMap<WatchDescriptor, WatchData>,
 ) -> bool {
-    if let Ok(descriptor) = inotify.watches().add(&watch.path, watch.mask.clone()) {
+    if let Ok(descriptor) = inotify.watches().add(&watch.path, watch.masks) {
         old_watches.retain(|d| descriptor != *d);
         watch_map.insert(descriptor, watch);
         return true;
     }
 
-    return false;
+    false
 }
 
+// TODO: cont
 fn reload_watches(
     mut old_watches: Vec<WatchDescriptor>,
     new_watches: Vec<WatchData>,
@@ -82,7 +83,7 @@ fn reload_watches(
                 continue;
             };
 
-            let Ok(metadata) =  entry.metadata() else {
+            let Ok(metadata) = entry.metadata() else {
                 continue;
             };
 
@@ -107,33 +108,54 @@ fn reload_watches(
     watch_map
 }
 
-fn handle_socket(update_watches: Arc<Mutex<bool>>) {
-    if Path::new(SOCKET).exists() {
-        fs::remove_file(SOCKET).expect(&format!("failed to remove `{SOCKET}`"));
-    }
-
-    let Ok(listener) = UnixListener::bind(SOCKET) else {
-        eprintln!("failed to bind to socket");
-        process::exit(1);
+#[tracing::instrument]
+fn handle_socket(tx: &Sender<SocketMessage>) {
+    let Ok(ref socket) = *SOCKET else {
+        return;
     };
 
-    for stream in listener.incoming() {
-        if let Ok(mut stream) = stream {
-            let update_watches = Arc::clone(&update_watches);
+    if Path::new(&socket).exists() {
+        if let Err(error) = fs::remove_file(socket) {
+            event!(Level::WARN, ?error, "failed to remove existing socket");
+            return;
+        }
+    }
+
+    let listener = match UnixListener::bind(socket) {
+        Ok(l) => l,
+        Err(error) => {
+            event!(Level::WARN, ?error, "failed to bind to socket");
+            return;
+        }
+    };
+
+    let tx = tx.clone();
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let tx = tx.clone();
             thread::spawn(move || {
-                let mut buffer = String::new();
-                if stream.read_to_string(&mut buffer).is_err() {
+                let mut buffer = [0; 100];
+                if stream.read(&mut buffer).is_err() {
                     return;
                 }
 
-                if buffer.as_str() == "RELOAD" {
-                    *update_watches.lock().unwrap() = true;
+                let Ok(SocketMessage::UpdateWatches) = bincode::deserialize(&buffer) else {
+                    return;
+                };
+
+                if let Err(error) = tx.send(SocketMessage::UpdateWatches) {
+                    event!(
+                        Level::WARN,
+                        ?error,
+                        "failed to send update message through channel"
+                    );
                 }
             });
         }
-    }
+    });
 }
 
+#[tracing::instrument]
 fn main() {
     let args = Args::parse();
 
@@ -142,13 +164,8 @@ fn main() {
         .extract()
         .unwrap();
 
-    let update_watches = Arc::new(Mutex::new(false));
-    {
-        let update_watches = Arc::clone(&update_watches);
-        thread::spawn(move || {
-            handle_socket(update_watches);
-        });
-    }
+    let (tx, rx) = mpsc::channel();
+    handle_socket(&tx);
 
     let mut buffer = [0; 4096];
     let mut inotify = Inotify::init().expect("Error while initializing inotify instance");
@@ -157,27 +174,27 @@ fn main() {
         match inotify.read_events_blocking(&mut buffer) {
             Err(_) => continue,
             Ok(events) => {
-                if let Ok(mut update) = update_watches.lock() {
-                    if *update {
+                match rx.try_recv() {
+                    Ok(SocketMessage::UpdateWatches) => {
                         watches = reload_watches(
                             watches.into_keys().collect(),
                             config.parse(),
                             &mut inotify,
                         );
-                        *update = false;
                     }
-                }
+                    Err(error) => event!(Level::WARN, ?error, "failed to receive from socket"),
+                };
 
                 for event in events {
                     if let Some(watch) = watches.get(&event.wd) {
-                        watch
-                            .command
-                            .execute(&watch.path, event.name, event.mask, event.mask.bits())
-                            .unwrap();
+                        watch.command.execute(&watch.path, &event).unwrap();
 
                         if watch.flags.recursive && event.mask.contains(EventMask::ISDIR) {
-                            *update_watches.lock().unwrap() = true;
-                        }
+                            if let Err(error) = tx.send(SocketMessage::UpdateWatches) {
+                                event!(Level::WARN, ?error, "failed to send message via channel");
+                                panic!("mpsc channel error");
+                            }
+                        };
                     }
                 }
             }
@@ -212,4 +229,35 @@ fn main() {
         });
     }
     */
+}
+
+#[cfg(test)]
+mod tests {
+    use inotify::{EventMask, Inotify, WatchMask};
+    use std::{error::Error, fs};
+    use tempfile::{tempdir, TempDir};
+
+    type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+    fn setup_inotify(mask: WatchMask) -> (Inotify, TempDir) {
+        let inotify = Inotify::init().unwrap();
+        let tmpdir = tempdir().unwrap();
+
+        inotify.watches().add(tmpdir.path(), mask).unwrap();
+
+        (inotify, tmpdir)
+    }
+
+    #[test]
+    fn test_create_watch() -> Result<()> {
+        let (mut inotify, tmpdir) = setup_inotify(WatchMask::CREATE);
+        let mut buffer = [0; 100];
+
+        fs::write(tmpdir.path().join("tempfile"), "").unwrap();
+        for event in inotify.read_events(&mut buffer).unwrap() {
+            assert_eq!(event.mask, EventMask::CREATE);
+        }
+
+        Ok(())
+    }
 }

@@ -1,0 +1,5 @@
+/var/tmp    IN_CREATE,recursive=true,IN_DELETE        echo $@ $# &> /dev/null
+/var/tmp         IN_CREATE,recursive=true,IN_DELETE echo $@ $# &> /dev/null
+/var/tmp            IN_CRATE,recursive=true,IN_DELETE               echo $@ $# &> /dev/null
+#/var/tmp IN_CRATE,recursive=true,IN_DELETE echo $@ $# &> /dev/null
+/var/tmpIN_CRATE,recursive=true,IN_DELETE echo

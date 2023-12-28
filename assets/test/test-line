@@ -1,0 +1,1 @@
+/var/tmp    IN_CREATE,recursive=true,IN_DELETE        echo $@ $# &> /dev/null

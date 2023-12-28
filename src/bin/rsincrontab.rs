@@ -3,14 +3,20 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use rsincronlib::{config::Config, watch::WatchData, SOCKET, XDG};
+use rsincronlib::{
+    config::Config,
+    watch::{ParseWatchError, WatchData},
+    SocketMessage, SOCKET, XDG,
+};
 use std::{
     fs::{self, File},
     io::{self, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::{self, Command},
+    process::Command,
+    str::FromStr,
 };
+use tracing::{event, Level};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -37,15 +43,15 @@ struct Args {
     config: PathBuf,
 }
 
+#[tracing::instrument]
 fn main() {
     let args = Args::parse();
-    let editor = std::env::var("EDITOR").unwrap_or(String::from("/usr/bin/vi"));
+    let editor = std::env::var("EDITOR").unwrap_or("/usr/bin/vi".to_string());
 
     let config: Config = Figment::new()
         .join(Toml::file(args.config))
         .extract()
         .unwrap();
-    //.expect(&format!("couldn't parse `{}` file", args.config));
 
     match args.mode {
         Mode::Edit => {
@@ -57,30 +63,40 @@ fn main() {
                 File::create(&tmpfile_path).expect("couldn't open tmp file for writing: exiting");
             };
 
-            let _exitstatus = Command::new(editor.clone())
-                .arg(&tmpfile_path)
-                .status()
-                .expect(&format!("failed to open EDITOR ({editor})"));
+            let Ok(_exitstatus) = Command::new(editor.clone()).arg(&tmpfile_path).status() else {
+                event!(Level::ERROR, editor, "failed to open $EDITOR");
+                return;
+            };
 
             let mut buf = String::new();
             for line in fs::read_to_string(tmpfile_path).unwrap_or_default().lines() {
-                match WatchData::try_from_str(line) {
-                    Ok(_) => buf.push_str(&format!("{line}\n")),
+                match WatchData::from_str(line) {
+                    Ok(_) | Err(ParseWatchError::IsComment) => buf.push_str(&format!("{line}\n")),
                     _ => continue,
                 };
             }
 
-            fs::write(&config.watch_table_file, buf).expect(&format!(
-                "failed to write to {}: exiting",
-                config.watch_table_file.to_string_lossy()
-            ));
+            if let Err(error) = fs::write(&config.watch_table_file, buf) {
+                event!(Level::ERROR, ?error, filename = ?config.watch_table_file, "failed to write rsincron table");
+                return;
+            }
 
-            if UnixStream::connect(SOCKET)
-                .map(|mut stream| stream.write_all("RELOAD".as_bytes()))
-                .is_err()
-            {
-                eprintln!("failed to bind to `/var/run/rsincrond.socket`: reload daemon manually");
-                process::exit(2);
+            let socket = match *SOCKET {
+                Ok(ref socket) => socket.to_owned(),
+                Err(ref error) => {
+                    event!(Level::WARN, ?error, socket = ?SOCKET, "failed to bind to socket: reload daemon manually");
+                    return;
+                }
+            };
+
+            if let Err(error) = UnixStream::connect(socket).map(|mut stream| {
+                stream.write_all(
+                    bincode::serialize(&SocketMessage::UpdateWatches)
+                        .unwrap()
+                        .as_slice(),
+                )
+            }) {
+                event!(Level::WARN, ?error, socket = ?SOCKET, "failed to send update socket message: reload daemon manually");
             }
         }
 
@@ -93,10 +109,14 @@ fn main() {
         }
 
         Mode::Remove => {
-            fs::remove_file(&config.watch_table_file).expect(&format!(
-                "failed to delete {}: exiting",
-                config.watch_table_file.to_string_lossy()
-            ));
+            if let Err(error) = fs::remove_file(&config.watch_table_file) {
+                event!(
+                    Level::ERROR,
+                    ?error,
+                    table = ?config.watch_table_file,
+                    "failed to delete table"
+                )
+            }
         }
     }
 }
