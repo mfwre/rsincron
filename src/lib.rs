@@ -5,6 +5,7 @@ pub mod parser;
 pub mod watch;
 
 use std::{io, path::PathBuf, sync::LazyLock};
+use tracing_subscriber::EnvFilter;
 
 use serde::{Deserialize, Serialize};
 use xdg::BaseDirectories;
@@ -18,4 +19,11 @@ pub static SOCKET: LazyLock<Result<PathBuf, io::Error>> =
 #[derive(Serialize, Deserialize)]
 pub enum SocketMessage {
     UpdateWatches,
+}
+
+pub fn with_logging() {
+    tracing_subscriber::fmt()
+        .with_writer(io::stderr)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 }

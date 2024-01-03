@@ -12,7 +12,7 @@ use winnow::{
 #[derive(Debug, PartialEq)]
 pub enum WatchOption {
     Mask(String),
-    Flag(String, bool),
+    Attribute(String, bool),
 }
 
 impl FromStr for WatchOption {
@@ -27,7 +27,7 @@ impl FromStr for WatchOption {
                 return Err(());
             };
 
-            return Ok(Self::Flag(name.to_owned(), value));
+            return Ok(Self::Attribute(name.to_owned(), value));
         }
 
         Ok(Self::Mask(s.to_owned()))
@@ -85,7 +85,7 @@ mod tests {
                 .unwrap(),
             vec![
                 WatchOption::Mask(String::from("IN_CREATE")),
-                WatchOption::Flag(String::from("recursive"), true),
+                WatchOption::Attribute(String::from("recursive"), true),
                 WatchOption::Mask(String::from("IN_DELETE"))
             ],
         );

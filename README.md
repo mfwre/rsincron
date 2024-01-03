@@ -78,18 +78,7 @@ Both `rsincrond` and `rsincrontab` look for a configuration file located under
 ```toml
 # Missing values from a config file default to the following
 watch_table = "$HOME/.local/share/rsincron.table"
-# poll_time = 1000  # time [ms] between health loop iteractions
-
-# [logging]
-# file = "/var/log/rsincron.log" # logfile path
-# stdout = true # if logging has to go also to standart output
-# level = "warn" # loglevel <debug|info|warn|error>
 ```
-
-### health loop
-Every `poll_time ms` the program checks in `recursive=true` watched folders for
-contained folders not having the same watch on. Adds to the active watches any
-inactive folders found.
 
 ## Roadmap
 - [ ] `rsincrontab`: `incrontab`'s sibling
@@ -99,7 +88,7 @@ inactive folders found.
     - [ ] add more verbose output
 
 - [ ] `rsincrond`: the daemon itself
-    - [ ] instantiate logging (somewhere has to be written which watches are
+    - [x] instantiate logging (somewhere has to be written which watches are
       working and which aren't)
     - [ ] build some sort of *same flag* watch if a directory is made inside a 
       watched one (with recursion **on**)
@@ -109,15 +98,14 @@ inactive folders found.
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
 - [ ] write documentation
-- [ ] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) (perhaps using [this](https://docs.rs/xdg/latest/xdg/index.html)?)
+- [x] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) (perhaps using [this](https://docs.rs/xdg/latest/xdg/index.html)?)
 
 ### Currently working on
 Some sort of runtime checks:
 - [ ] loop checks for missed folders, if recursion is on, and adds them to the
   active watches
-- [ ] general, configurable, logging (now it's very minimal to stdin/stderr)
 - [ ] loop checks for removed folders 
-- [ ] better debug and info logging
+- [=] better debug and info logging
 
 
 ## About
@@ -137,6 +125,5 @@ proof-of-concept at the moment.
 ## Known issues
 - [ ] daemon ignores events if watched folder is deleted and recreated while
   running
-- [ ] no recursion is available at the moment
 - [ ] if started and watched folder isn't available daemon skips watch
 - [ ] `mkdir -p watched_dir/{1,2,3}/2/3` doesn't trigger on subfolders

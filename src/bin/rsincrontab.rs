@@ -6,14 +6,14 @@ use figment::{
 use rsincronlib::{
     config::Config,
     watch::{ParseWatchError, WatchData},
-    SocketMessage, SOCKET, XDG,
+    with_logging, SocketMessage, SOCKET, XDG,
 };
 use std::{
     fs::{self, File},
     io::{self, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, ExitCode},
     str::FromStr,
 };
 use tracing::{event, Level};
@@ -37,24 +37,32 @@ struct Args {
         long,
         default_value = XDG
             .place_config_file("rsincron.toml")
-            .expect("failed to get `config.toml`: do I have permissions?")
+            .expect("failed to get `rsincron.toml`: do I have permissions?")
             .into_os_string()
         )]
     config: PathBuf,
 }
 
 #[tracing::instrument]
-fn main() {
+fn main() -> ExitCode {
+    with_logging();
     let args = Args::parse();
     let editor = std::env::var("EDITOR").unwrap_or("/usr/bin/vi".to_string());
 
-    let config: Config = Figment::new()
-        .join(Toml::file(args.config))
-        .extract()
-        .unwrap();
+    let config: Config = match Figment::new().join(Toml::file(args.config)).extract() {
+        Ok(c) => c,
+        Err(error) => {
+            event!(
+                Level::WARN,
+                ?error,
+                "failed to parse configuration file. Using default configuration"
+            );
+            Config::default()
+        }
+    };
 
     match args.mode {
-        Mode::Edit => {
+        Mode::Edit => 'arm: {
             let tmpfile_path = std::env::temp_dir().join(Uuid::new_v4().to_string());
             if Path::new(&config.watch_table_file).exists() {
                 fs::copy(&config.watch_table_file, &tmpfile_path)
@@ -65,7 +73,7 @@ fn main() {
 
             let Ok(_exitstatus) = Command::new(editor.clone()).arg(&tmpfile_path).status() else {
                 event!(Level::ERROR, editor, "failed to open $EDITOR");
-                return;
+                return ExitCode::FAILURE;
             };
 
             let mut buf = String::new();
@@ -78,25 +86,30 @@ fn main() {
 
             if let Err(error) = fs::write(&config.watch_table_file, buf) {
                 event!(Level::ERROR, ?error, filename = ?config.watch_table_file, "failed to write rsincron table");
-                return;
+                return ExitCode::FAILURE;
             }
 
             let socket = match *SOCKET {
                 Ok(ref socket) => socket.to_owned(),
                 Err(ref error) => {
                     event!(Level::WARN, ?error, socket = ?SOCKET, "failed to bind to socket: reload daemon manually");
-                    return;
+                    break 'arm;
                 }
             };
 
-            if let Err(error) = UnixStream::connect(socket).map(|mut stream| {
+            if let Err(error) = UnixStream::connect(&socket).map(|mut stream| {
                 stream.write_all(
                     bincode::serialize(&SocketMessage::UpdateWatches)
                         .unwrap()
                         .as_slice(),
                 )
             }) {
-                event!(Level::WARN, ?error, socket = ?SOCKET, "failed to send update socket message: reload daemon manually");
+                event!(
+                    Level::WARN,
+                    ?error,
+                    ?socket,
+                    "failed to send update socket message: reload daemon manually"
+                );
             }
         }
 
@@ -119,4 +132,6 @@ fn main() {
             }
         }
     }
+
+    ExitCode::SUCCESS
 }
