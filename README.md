@@ -105,7 +105,6 @@ Some sort of runtime checks:
 - [ ] loop checks for missed folders, if recursion is on, and adds them to the
   active watches
 - [ ] loop checks for removed folders 
-- [=] better debug and info logging
 
 
 ## About
