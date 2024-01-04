@@ -35,7 +35,12 @@ struct Args {
 
 #[tracing::instrument(skip_all)]
 fn handle_event(event: Event<OsString>, state: &mut State) {
-    event!(Level::INFO, ?event);
+    event!(
+        Level::INFO,
+        event_id = event.wd.get_watch_descriptor_id(),
+        mask = ?event.mask,
+        name = ?event.name
+    );
     if state.has_socket {
         match state.rx.try_recv() {
             Ok(SocketMessage::UpdateWatches) => state.reload_watches(),

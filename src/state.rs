@@ -1,10 +1,10 @@
 use crate::{
     config::Config,
-    watch::{WatchData, WatchDataAttributes},
+    watch::{ParseWatchError, WatchData, WatchDataAttributes},
     SocketMessage, SOCKET,
 };
 use inotify::{Inotify, WatchDescriptor, WatchMask};
-use tracing::{event, Level};
+use tracing::{event, span, Level};
 
 use std::{
     collections::HashMap,
@@ -17,55 +17,6 @@ use std::{
     sync::mpsc::{self, Receiver},
     thread,
 };
-
-#[tracing::instrument(skip_all)]
-fn setup_watch(
-    map: &mut HashMap<WatchDescriptor, WatchData>,
-    watches: &mut inotify::Watches,
-    watch: WatchData,
-) {
-    let Ok(descriptor) = watches.add(&watch.path, watch.masks) else {
-        event!(Level::WARN, "failed to add watch");
-        return;
-    };
-
-    event!(
-        Level::INFO,
-        id = descriptor.get_watch_descriptor_id(),
-        ?watch.path,
-        ?watch.masks,
-        "ADD"
-    );
-
-    if watch.attributes.recursive && watch.masks.contains(WatchMask::CREATE) {
-        for entry in fs::read_dir(&watch.path).unwrap() {
-            let Ok(entry) = entry else {
-                continue;
-            };
-
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-
-            if !metadata.is_dir() {
-                continue;
-            }
-
-            let watch = WatchData {
-                path: watch.path.join(entry.file_name()),
-                attributes: WatchDataAttributes {
-                    starting: false,
-                    recursive: true,
-                },
-                ..watch.clone()
-            };
-
-            setup_watch(map, watches, watch)
-        }
-    };
-
-    map.insert(descriptor, watch);
-}
 
 #[tracing::instrument(skip_all)]
 fn setup_socket(tx: Sender<SocketMessage>) -> bool {
@@ -123,6 +74,8 @@ pub struct State {
     config: Config,
     inotify_watches: inotify::Watches,
     watches: Watches,
+
+    span: tracing::Span,
 }
 
 impl State {
@@ -136,10 +89,11 @@ impl State {
             failed_watches: Vec::new(),
             has_socket: setup_socket(tx),
             inotify_watches: inotify.watches(),
+            span: span!(Level::INFO, "state"),
         }
     }
 
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, parent = &self.span)]
     pub fn reload_watches(&mut self) {
         self.watches.clear();
         event!(Level::INFO, table = ?self.config.watch_table_file, "RELOAD");
@@ -156,15 +110,19 @@ impl State {
             let watch = match WatchData::from_str(line) {
                 Ok(w) => w,
                 Err(error) => {
-                    event!(Level::WARN, ?error, line, "failed to parse line");
+                    if error != ParseWatchError::IsComment {
+                        event!(Level::WARN, ?error, line, "failed to parse line");
+                    }
+
                     continue;
                 }
             };
 
-            setup_watch(&mut self.watches, &mut self.inotify_watches, watch);
+            self.add_watch(watch);
         }
     }
 
+    #[tracing::instrument(skip_all, parent = &self.span)]
     pub fn recover_watches(&mut self) {
         self.failed_watches.retain(|watch| {
             let Ok(descriptor) = self.inotify_watches.add(watch.path.clone(), watch.masks) else {
@@ -189,5 +147,50 @@ impl State {
 
     pub fn remove_watch(&mut self, wd: &WatchDescriptor) -> Option<WatchData> {
         self.watches.remove(wd)
+    }
+
+    #[tracing::instrument(skip_all, parent = &self.span)]
+    fn add_watch(&mut self, watch: WatchData) {
+        let Ok(descriptor) = self.inotify_watches.add(&watch.path, watch.masks) else {
+            event!(Level::WARN, "failed to add watch");
+            return;
+        };
+
+        event!(
+            Level::INFO,
+            id = descriptor.get_watch_descriptor_id(),
+            ?watch.path,
+            ?watch.masks,
+            "ADD"
+        );
+
+        if watch.attributes.recursive && watch.masks.contains(WatchMask::CREATE) {
+            for entry in fs::read_dir(&watch.path).unwrap() {
+                let Ok(entry) = entry else {
+                    continue;
+                };
+
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+
+                if !metadata.is_dir() {
+                    continue;
+                }
+
+                let watch = WatchData {
+                    path: watch.path.join(entry.file_name()),
+                    attributes: WatchDataAttributes {
+                        starting: false,
+                        recursive: true,
+                    },
+                    ..watch.clone()
+                };
+
+                self.add_watch(watch)
+            }
+        };
+
+        self.watches.insert(descriptor, watch);
     }
 }
