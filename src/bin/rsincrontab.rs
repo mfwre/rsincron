@@ -92,7 +92,12 @@ fn main() -> ExitCode {
             let socket = match *SOCKET {
                 Ok(ref socket) => socket.to_owned(),
                 Err(ref error) => {
-                    event!(Level::WARN, ?error, socket = ?SOCKET, "failed to bind to socket: reload daemon manually");
+                    event!(
+                        Level::WARN,
+                        ?error,
+                        socket = ?*SOCKET,
+                        "failed to bind to socket: reload daemon manually"
+                    );
                     break 'arm;
                 }
             };
