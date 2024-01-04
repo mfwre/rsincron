@@ -1,21 +1,21 @@
-#![feature(lazy_cell)]
 pub mod config;
 pub mod events;
 pub mod parser;
 pub mod state;
 pub mod watch;
 
-use std::{io, path::PathBuf, sync::LazyLock};
+use lazy_static::lazy_static;
+use std::{io, path::PathBuf};
 use tracing_subscriber::EnvFilter;
 
 use serde::{Deserialize, Serialize};
 use xdg::BaseDirectories;
 
-pub static XDG: LazyLock<BaseDirectories> =
-    LazyLock::new(|| BaseDirectories::new().expect("failed to get XDG env vars: are they set?"));
-
-pub static SOCKET: LazyLock<Result<PathBuf, io::Error>> =
-    LazyLock::new(|| XDG.place_runtime_file("rsincron.socket"));
+lazy_static! {
+    pub static ref XDG: BaseDirectories =
+        BaseDirectories::new().expect("failed to get XDG env vars: are they set?");
+    pub static ref SOCKET: Result<PathBuf, io::Error> = XDG.place_runtime_file("rsincron.socket");
+}
 
 #[derive(Serialize, Deserialize)]
 pub enum SocketMessage {
