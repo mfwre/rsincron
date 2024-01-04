@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::OsStr,
+    ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
     process::{self, ExitStatus},
@@ -12,7 +12,7 @@ use crate::{
     parser::WatchOption,
     parser::{parse_command, parse_masks, parse_path},
 };
-use inotify::{Event, Inotify, WatchDescriptor, WatchMask};
+use inotify::{Event, WatchDescriptor, WatchMask};
 use tracing::{event, Level};
 use walkdir::WalkDir;
 use winnow::{combinator::cut_err, Parser};
@@ -24,7 +24,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn execute(&self, path: &Path, event: &Event<&OsStr>) -> Result<ExitStatus, io::Error> {
+    pub fn execute(&self, path: &Path, event: &Event<OsString>) -> Result<ExitStatus, io::Error> {
         process::Command::new(&self.program)
             .args(self.argv.iter().map(|arg| {
                 let mut formatted = String::new();
@@ -38,8 +38,13 @@ impl Command {
                         parsing_dollar = !parsing_dollar;
                     } else if parsing_dollar {
                         match c {
-                            '#' => formatted
-                                .push_str(event.name.and_then(|s| s.to_str()).unwrap_or_default()),
+                            '#' => formatted.push_str(
+                                event
+                                    .name
+                                    .as_deref()
+                                    .map(|s| s.to_str().unwrap_or_default())
+                                    .unwrap_or_default(),
+                            ),
                             '@' => formatted.push_str(path.to_str().unwrap_or_default()),
                             '%' => formatted.push_str(&format!("\"{:?}\"", event.mask)),
                             '&' => formatted.push_str(&event.mask.bits().to_string()),
@@ -144,8 +149,8 @@ impl FromStr for WatchData {
 pub struct Watches(pub HashMap<WatchDescriptor, WatchData>);
 
 impl Watches {
-    #[tracing::instrument(skip(self, inotify))]
-    pub fn reload_table(&mut self, table: &PathBuf, inotify: &mut Inotify) {
+    #[tracing::instrument(skip(self, watches))]
+    pub fn reload_table(&mut self, table: &PathBuf, watches: &mut inotify::Watches) {
         event!(Level::DEBUG, ?self, "reloading watches");
         let table_content = match fs::read_to_string(table) {
             Ok(table_content) => table_content,
@@ -155,29 +160,32 @@ impl Watches {
             }
         };
 
-        let watches = table_content
-            .lines()
-            .map(|line| {
-                let watch = match WatchData::from_str(line) {
-                    Ok(w) => w,
-                    Err(error) => {
-                        event!(Level::WARN, ?error, line, "failed to parse line");
+        let parsed_watches = {
+            let mut watches = watches.clone();
+            table_content
+                .lines()
+                .map(move |line| {
+                    let watch = match WatchData::from_str(line) {
+                        Ok(w) => w,
+                        Err(error) => {
+                            event!(Level::WARN, ?error, line, "failed to parse line");
+                            return None;
+                        }
+                    };
+
+                    let Ok(descriptor) = watches.add(&watch.path, watch.masks) else {
+                        event!(Level::WARN, "failed to add watch");
                         return None;
-                    }
-                };
+                    };
 
-                let Ok(descriptor) = inotify.watches().add(&watch.path, watch.masks) else {
-                    event!(Level::WARN, "failed to add watch");
-                    return None;
-                };
+                    event!(Level::DEBUG, ?descriptor, ?watch, "adding watch");
+                    Some((descriptor, watch))
+                })
+                .take_while(Option::is_some)
+                .map(Option::unwrap)
+        };
 
-                event!(Level::DEBUG, ?descriptor, ?watch, "adding watch");
-                Some((descriptor, watch))
-            })
-            .take_while(Option::is_some)
-            .map(Option::unwrap);
-
-        let recursive_watches = watches
+        let recursive_watches = parsed_watches
             .clone()
             .filter(|w| w.1.attributes.recursive && w.1.masks.contains(WatchMask::CREATE))
             .map(|(_, w)| {
@@ -204,7 +212,7 @@ impl Watches {
                         ..w.clone()
                     };
 
-                    let Ok(descriptor) = inotify.watches().add(&watch.path, watch.masks) else {
+                    let Ok(descriptor) = watches.add(&watch.path, watch.masks) else {
                         event!(Level::WARN, "failed to add watch");
                         continue;
                     };
@@ -217,7 +225,7 @@ impl Watches {
             .flatten();
 
         self.0.clear();
-        self.0.extend(watches);
+        self.0.extend(parsed_watches);
         self.0.extend(recursive_watches);
     }
 }

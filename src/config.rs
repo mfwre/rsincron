@@ -2,7 +2,7 @@ use crate::XDG;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct Config {
     pub watch_table_file: PathBuf,
 }

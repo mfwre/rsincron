@@ -3,19 +3,33 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use inotify::{EventMask, Inotify};
-use rsincronlib::{config::Config, watch::Watches, with_logging, SocketMessage, SOCKET, XDG};
+use futures::{lock::Mutex, StreamExt};
+use inotify::{Event, EventMask, Inotify, WatchDescriptor};
+use rsincronlib::{
+    config::Config,
+    watch::{WatchData, Watches},
+    with_logging, SocketMessage, SOCKET, XDG,
+};
 use std::{
+    ffi::OsString,
     fs,
     io::Read,
     os::unix::net::UnixListener,
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, OnceLock,
+    },
     thread,
+    time::Duration,
 };
 
 use tracing::{event, Level};
+
+const ONE_SECOND: Duration = Duration::from_secs(1);
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -31,18 +45,16 @@ struct Args {
 }
 
 #[tracing::instrument(skip_all)]
-fn handle_socket() -> Option<Receiver<SocketMessage>> {
-    let (tx, rx) = mpsc::channel();
-
+fn setup_reload_socket(tx: Sender<SocketMessage>) -> bool {
     let Ok(ref socket) = *SOCKET else {
         event!(Level::WARN, "failed to setup socket");
-        return None;
+        return false;
     };
 
     if Path::new(&socket).exists() {
         if let Err(error) = fs::remove_file(socket) {
             event!(Level::WARN, ?error, "failed to remove existing socket");
-            return None;
+            return false;
         }
     }
 
@@ -50,136 +62,189 @@ fn handle_socket() -> Option<Receiver<SocketMessage>> {
         Ok(l) => l,
         Err(error) => {
             event!(Level::WARN, ?error, "failed to bind to socket");
-            return None;
+            return false;
         }
     };
 
-    let tx = tx.clone();
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                let mut buffer = [0; 100];
-                if stream.read(&mut buffer).is_err() {
-                    return;
-                }
+            let mut buffer = [0; 100];
+            if stream.read(&mut buffer).is_err() {
+                return;
+            }
 
-                let Ok(SocketMessage::UpdateWatches) = bincode::deserialize(&buffer) else {
-                    return;
-                };
+            let Ok(SocketMessage::UpdateWatches) = bincode::deserialize(&buffer) else {
+                return;
+            };
 
-                if let Err(error) = tx.send(SocketMessage::UpdateWatches) {
-                    event!(
-                        Level::WARN,
-                        ?error,
-                        "failed to send update message through channel"
-                    );
-                }
-            });
+            if let Err(error) = tx.send(SocketMessage::UpdateWatches) {
+                event!(
+                    Level::WARN,
+                    ?error,
+                    "failed to send update message through channel"
+                );
+            }
         }
     });
 
-    Some(rx)
+    true
 }
 
 #[tracing::instrument(skip_all)]
-fn handle_events(
-    inotify: &mut Inotify,
-    rx: &Option<Receiver<SocketMessage>>,
-    buffer: &mut [u8],
-    watches: &mut Watches,
-    watch_table: &PathBuf,
-) -> u8 {
-    match inotify.read_events_blocking(buffer) {
-        Err(error) => {
-            event!(Level::ERROR, ?error, "inotify error");
-            1
-        }
-        Ok(events) => {
-            if let Some(ref rx) = rx {
-                match rx.try_recv() {
-                    Ok(SocketMessage::UpdateWatches) => watches.reload_table(&watch_table, inotify),
-                    Err(mpsc::TryRecvError::Empty) => (),
-                    Err(error) => event!(Level::WARN, ?error),
-                };
+fn handle_event(event: Event<OsString>, state: &mut State) {
+    event!(Level::DEBUG, ?event);
+    if state.has_socket {
+        match state.rx.try_recv() {
+            Ok(SocketMessage::UpdateWatches) => state.reload(),
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(error) => {
+                event!(Level::WARN, ?error);
+                state.has_socket = false;
             }
+        };
+    }
 
-            for event in events {
-                event!(Level::DEBUG, ?event);
-                let Some(watch) = watches.0.get(&event.wd) else {
-                    continue;
-                };
+    let Some(watch) = state.get_watch(&event.wd) else {
+        return;
+    };
 
-                if let Err(error) = watch.command.execute(&watch.path, &event) {
-                    event!(
-                        Level::ERROR,
-                        ?error,
-                        command = watch.command.program,
-                        argv = ?watch.command.argv,
-                        "failed to execute command"
-                    );
-                    continue;
-                }
+    if let Err(error) = watch.command.execute(&watch.path, &event) {
+        event!(
+            Level::ERROR,
+            ?error,
+            command = watch.command.program,
+            argv = ?watch.command.argv,
+            "failed to execute command"
+        );
+        return;
+    }
 
-                if event.mask == EventMask::IGNORED {
-                    let Some(watch) = watches.0.remove(&event.wd) else {
-                        continue;
-                    };
+    if event.mask == EventMask::IGNORED {
+        let Some(watch) = state.remove_watch(&event.wd) else {
+            return;
+        };
 
-                    event!(Level::WARN, ?event.mask, path = ?watch.path, "removing watch");
-                    continue;
-                }
+        event!(Level::WARN, ?event.mask, path = ?watch.path, "removing watch");
+        state.failed_watches.push(watch);
+        return;
+    }
 
-                if watch.attributes.recursive && event.mask.contains(EventMask::ISDIR) {
-                    watches.reload_table(&watch_table, inotify);
-                }
-            }
-            0
-        }
+    if watch.attributes.recursive && event.mask.contains(EventMask::ISDIR) {
+        state.reload()
     }
 }
 
+struct State {
+    inotify_watches: inotify::Watches,
+    watches: Watches,
+    failed_watches: Vec<WatchData>,
+    has_socket: bool,
+    rx: Receiver<SocketMessage>,
+}
+
+impl State {
+    fn new(inotify: &mut Inotify) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let mut watches = Watches::default();
+        let mut inotify_watches = inotify.watches();
+
+        watches.reload_table(
+            &CONFIG.get().unwrap().watch_table_file,
+            &mut inotify_watches,
+        );
+
+        Self {
+            watches,
+            rx,
+            failed_watches: Vec::new(),
+            has_socket: setup_reload_socket(tx),
+            inotify_watches: inotify.watches(),
+        }
+    }
+
+    fn reload(&mut self) {
+        self.watches.reload_table(
+            &CONFIG.get().unwrap().watch_table_file,
+            &mut self.inotify_watches,
+        )
+    }
+
+    fn recover_watches(&mut self) {
+        self.failed_watches.retain(|watch| {
+            let Ok(descriptor) = self.inotify_watches.add(watch.path.clone(), watch.masks) else {
+                return true;
+            };
+
+            event!(Level::DEBUG, ?descriptor, ?watch, "adding watch");
+            self.watches.0.insert(descriptor, watch.clone());
+            false
+        });
+    }
+
+    fn get_watch(&self, wd: &WatchDescriptor) -> Option<&WatchData> {
+        self.watches.0.get(wd)
+    }
+
+    fn remove_watch(&mut self, wd: &WatchDescriptor) -> Option<WatchData> {
+        self.watches.0.remove(wd)
+    }
+}
+
+#[tokio::main]
 #[tracing::instrument]
-fn main() -> ExitCode {
+async fn main() -> ExitCode {
     with_logging();
 
     let args = Args::parse();
-    let config: Config = match Figment::new().join(Toml::file(args.config)).extract() {
-        Ok(c) => c,
-        Err(error) => {
-            event!(
-                Level::WARN,
-                ?error,
-                "failed to parse configuration file. Using default configuration"
-            );
-            Config::default()
-        }
-    };
 
-    let rx = handle_socket();
+    CONFIG
+        .set(
+            match Figment::new().join(Toml::file(args.config)).extract() {
+                Ok(c) => c,
+                Err(error) => {
+                    event!(
+                        Level::WARN,
+                        ?error,
+                        "failed to parse configuration file. Using default configuration"
+                    );
+                    Config::default()
+                }
+            },
+        )
+        .unwrap();
 
     let Ok(mut inotify) = Inotify::init() else {
         event!(Level::ERROR, "failed to set up inotify instance");
-        return ExitCode::from(1);
+        return ExitCode::FAILURE;
     };
 
-    let mut buffer = [0; 4096];
-    let mut watches = Watches::default();
-    watches.reload_table(&config.watch_table_file, &mut inotify);
+    let state = Arc::new(Mutex::new(State::new(&mut inotify)));
 
-    loop {
-        let exit_code = handle_events(
-            &mut inotify,
-            &rx,
-            &mut buffer,
-            &mut watches,
-            &config.watch_table_file,
-        );
+    let buffer = [0; 4096];
+    let Ok(mut events_stream) = inotify.into_event_stream(buffer) else {
+        return ExitCode::FAILURE;
+    };
 
-        if exit_code != 0 {
-            return ExitCode::from(exit_code);
-        }
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(ONE_SECOND).await;
+                state.lock().await.recover_watches();
+            }
+        });
     }
+
+    while let Some(event) = events_stream.next().await {
+        let Ok(event) = event else {
+            event!(Level::ERROR, ?event, "failed to parse event");
+            break;
+        };
+
+        handle_event(event, &mut *state.lock().await);
+    }
+
+    ExitCode::SUCCESS
 }
 
 #[cfg(test)]

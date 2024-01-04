@@ -9,6 +9,12 @@ Run ```cargo install rsincron```.
 
 
 ## Usage
+### `rsincrond`
+Simply run the daemon with `rsincrond`. The program doesn't background itself.
+Logs get written to the standard error. Customize targets and log levels with
+the `RUST_LOG` environment variable (see the
+[`env_logger` crate](https://docs.rs/env_logger/0.10.1/env_logger/#enabling-logging)).
+
 ### `rsincrontab`
 Tool to manage your watches. Usage:
 ```bash
@@ -60,16 +66,11 @@ the supplied command:
 - `$&` -> triggered event masks as bits
 
 #### list
-Lists only lines parsed without errors. A logfile, per default
-`/var/log/rsincron.log` will contain details about incorrect input supplied.
+Lists only lines parsed without errors. 
 
 #### remove
 Deletes user's `rsincron.table` (per default
 `$HOME/.local/share/rsincron.table`).
-
-
-### `rsincrond`
-Simply run `rsincrond`. The program doesn't background itself.
 
 
 ## Configuration
@@ -87,11 +88,9 @@ watch_table = "$HOME/.local/share/rsincron.table"
         - [ ] *dotdirs*
     - [ ] add more verbose output
 
-- [ ] `rsincrond`: the daemon itself
+- [x] `rsincrond`: the daemon itself
     - [x] instantiate logging (somewhere has to be written which watches are
       working and which aren't)
-    - [ ] build some sort of *same flag* watch if a directory is made inside a 
-      watched one (with recursion **on**)
     - [x] reload table (`rsincrontab edit` triggers a reload of the watch table
       through a socket `/var/run/rsincron/rsincron.socket`)
 
@@ -99,12 +98,6 @@ watch_table = "$HOME/.local/share/rsincron.table"
 - [ ] cleanup and reorganize code to allow more modularity
 - [ ] write documentation
 - [x] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) (perhaps using [this](https://docs.rs/xdg/latest/xdg/index.html)?)
-
-### Currently working on
-Some sort of runtime checks:
-- [ ] loop checks for missed folders, if recursion is on, and adds them to the
-  active watches
-- [ ] loop checks for removed folders 
 
 
 ## About
@@ -122,7 +115,5 @@ Please expect lots of bugs, `rsincron` isn't alpha yet. It looks closer to a
 proof-of-concept at the moment.
 
 ## Known issues
-- [ ] daemon ignores events if watched folder is deleted and recreated while
-  running
 - [ ] if started and watched folder isn't available daemon skips watch
 - [ ] `mkdir -p watched_dir/{1,2,3}/2/3` doesn't trigger on subfolders
