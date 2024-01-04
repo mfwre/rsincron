@@ -1,7 +1,6 @@
 use std::{
-    collections::HashMap,
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     process::{self, ExitStatus},
     str::FromStr,
@@ -12,9 +11,8 @@ use crate::{
     parser::WatchOption,
     parser::{parse_command, parse_masks, parse_path},
 };
-use inotify::{Event, WatchDescriptor, WatchMask};
+use inotify::{Event, WatchMask};
 use tracing::{event, Level};
-use walkdir::WalkDir;
 use winnow::{combinator::cut_err, Parser};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,12 +67,12 @@ pub enum ParseWatchError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Attributes {
+pub struct WatchDataAttributes {
     pub starting: bool,
     pub recursive: bool,
 }
 
-impl Default for Attributes {
+impl Default for WatchDataAttributes {
     fn default() -> Self {
         Self {
             starting: true,
@@ -88,7 +86,7 @@ pub struct WatchData {
     pub path: PathBuf,
     pub masks: WatchMask,
     pub command: Command,
-    pub attributes: Attributes,
+    pub attributes: WatchDataAttributes,
 }
 
 impl FromStr for WatchData {
@@ -108,7 +106,7 @@ impl FromStr for WatchData {
         )
             .map(|(path, watch_options, command)| {
                 let mut masks = WatchMask::empty();
-                let mut attributes = Attributes::default();
+                let mut attributes = WatchDataAttributes::default();
 
                 for option in watch_options {
                     match option {
@@ -145,98 +143,13 @@ impl FromStr for WatchData {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Watches(pub HashMap<WatchDescriptor, WatchData>);
-
-impl Watches {
-    #[tracing::instrument(skip(self, watches))]
-    pub fn reload_table(&mut self, table: &PathBuf, watches: &mut inotify::Watches) {
-        event!(Level::DEBUG, ?self, "reloading watches");
-        let table_content = match fs::read_to_string(table) {
-            Ok(table_content) => table_content,
-            _ => {
-                event!(Level::ERROR, filename = ?table, "failed to read file");
-                panic!("failed to read watch table file");
-            }
-        };
-
-        let parsed_watches = {
-            let mut watches = watches.clone();
-            table_content
-                .lines()
-                .map(move |line| {
-                    let watch = match WatchData::from_str(line) {
-                        Ok(w) => w,
-                        Err(error) => {
-                            event!(Level::WARN, ?error, line, "failed to parse line");
-                            return None;
-                        }
-                    };
-
-                    let Ok(descriptor) = watches.add(&watch.path, watch.masks) else {
-                        event!(Level::WARN, "failed to add watch");
-                        return None;
-                    };
-
-                    event!(Level::DEBUG, ?descriptor, ?watch, "adding watch");
-                    Some((descriptor, watch))
-                })
-                .take_while(Option::is_some)
-                .map(Option::unwrap)
-        };
-
-        let recursive_watches = parsed_watches
-            .clone()
-            .filter(|w| w.1.attributes.recursive && w.1.masks.contains(WatchMask::CREATE))
-            .map(|(_, w)| {
-                let mut tmp = vec![];
-                for entry in WalkDir::new(&w.path).min_depth(1) {
-                    let Ok(entry) = entry else {
-                        continue;
-                    };
-
-                    let Ok(metadata) = entry.metadata() else {
-                        continue;
-                    };
-
-                    if !metadata.is_dir() {
-                        continue;
-                    }
-
-                    let watch = WatchData {
-                        path: w.path.join(entry.path()),
-                        attributes: Attributes {
-                            starting: false,
-                            recursive: true,
-                        },
-                        ..w.clone()
-                    };
-
-                    let Ok(descriptor) = watches.add(&watch.path, watch.masks) else {
-                        event!(Level::WARN, "failed to add watch");
-                        continue;
-                    };
-
-                    event!(Level::DEBUG, ?descriptor, ?watch, "adding watch");
-                    tmp.push((descriptor, watch));
-                }
-                tmp
-            })
-            .flatten();
-
-        self.0.clear();
-        self.0.extend(parsed_watches);
-        self.0.extend(recursive_watches);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use inotify::WatchMask;
 
-    use crate::watch::{Attributes, Command, ParseWatchError, WatchData};
+    use crate::watch::{Command, ParseWatchError, WatchData, WatchDataAttributes};
 
     const LINE_DATA: &str = include_str!("../assets/test/test-line");
     const DATA: &str = include_str!("../assets/test/test-table");
@@ -245,7 +158,7 @@ mod tests {
         WatchData {
             path: PathBuf::from("/var/tmp"),
             masks: WatchMask::CREATE | WatchMask::DELETE,
-            attributes: Attributes {
+            attributes: WatchDataAttributes {
                 starting: true,
                 recursive: true,
             },

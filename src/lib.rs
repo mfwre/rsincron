@@ -2,6 +2,7 @@
 pub mod config;
 pub mod events;
 pub mod parser;
+pub mod state;
 pub mod watch;
 
 use std::{io, path::PathBuf, sync::LazyLock};
