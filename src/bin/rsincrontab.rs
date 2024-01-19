@@ -54,7 +54,7 @@ fn main() -> ExitCode {
         Err(error) => {
             event!(
                 Level::WARN,
-                ?error,
+                error = ?error.kind,
                 "failed to parse configuration file. Using default configuration"
             );
             Config::default()
