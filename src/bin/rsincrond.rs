@@ -34,13 +34,14 @@ struct Args {
 }
 
 #[tracing::instrument(skip_all)]
-fn handle_event(event: Event<OsString>, state: &mut State) {
+async fn handle_event(event: Event<OsString>, state: &mut State) {
     event!(
         Level::INFO,
         event_id = event.wd.get_watch_descriptor_id(),
         mask = ?event.mask,
         name = ?event.name
     );
+
     if state.has_socket {
         match state.rx.try_recv() {
             Ok(SocketMessage::UpdateWatches) => state.reload_watches(),
@@ -56,7 +57,7 @@ fn handle_event(event: Event<OsString>, state: &mut State) {
         return;
     };
 
-    if let Err(error) = watch.command.execute(&watch.path, &event) {
+    if let Err(error) = watch.command.execute(&watch.path, &event).await {
         event!(
             Level::ERROR,
             ?error,
@@ -137,7 +138,7 @@ async fn main() -> ExitCode {
             break;
         };
 
-        handle_event(event, &mut *state.lock().await);
+        handle_event(event, &mut *state.lock().await).await;
     }
 
     ExitCode::SUCCESS

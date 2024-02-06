@@ -2,7 +2,7 @@ use std::{
     ffi::OsString,
     io,
     path::{Path, PathBuf},
-    process::{self, ExitStatus},
+    process::ExitStatus,
     str::FromStr,
 };
 
@@ -22,8 +22,12 @@ pub struct Command {
 }
 
 impl Command {
-    pub fn execute(&self, path: &Path, event: &Event<OsString>) -> Result<ExitStatus, io::Error> {
-        process::Command::new(&self.program)
+    pub async fn execute(
+        &self,
+        path: &Path,
+        event: &Event<OsString>,
+    ) -> Result<ExitStatus, io::Error> {
+        tokio::process::Command::new(&self.program)
             .args(self.argv.iter().map(|arg| {
                 let mut formatted = String::new();
                 let mut parsing_dollar = false;
@@ -56,6 +60,7 @@ impl Command {
                 formatted
             }))
             .status()
+            .await
     }
 }
 
