@@ -88,16 +88,9 @@ watch_table = "$HOME/.local/share/rsincron.table"
         - [ ] *dotdirs*
     - [ ] add more verbose output
 
-- [x] `rsincrond`: the daemon itself
-    - [x] instantiate logging (somewhere has to be written which watches are
-      working and which aren't)
-    - [x] reload table (`rsincrontab edit` triggers a reload of the watch table
-      through a socket `/var/run/rsincron/rsincron.socket`)
-
 - [ ] write every single type of test
 - [ ] cleanup and reorganize code to allow more modularity
 - [ ] write documentation
-- [x] implement [XDG specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html) (perhaps using [this](https://docs.rs/xdg/latest/xdg/index.html)?)
 
 
 ## About
