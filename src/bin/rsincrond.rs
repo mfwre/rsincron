@@ -3,14 +3,21 @@ use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use futures::{lock::Mutex, StreamExt};
+use futures::StreamExt;
 use inotify::{Event, EventMask, Inotify};
-use rsincronlib::{config::Config, state::State, with_logging, SocketMessage, XDG};
+use rsincronlib::{
+    config::Config,
+    state::{ArcShared, Shared, State},
+    with_logging, SocketMessage, XDG,
+};
+
+use tokio::sync::mpsc;
+
 use std::{
     ffi::OsString,
     path::PathBuf,
     process::ExitCode,
-    sync::{mpsc, Arc, OnceLock},
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -34,7 +41,7 @@ struct Args {
 }
 
 #[tracing::instrument(skip_all)]
-async fn handle_event(event: Event<OsString>, state: &mut State) {
+async fn handle_event(event: Event<OsString>, state: ArcShared) {
     event!(
         Level::INFO,
         event_id = event.wd.get_watch_descriptor_id(),
@@ -42,13 +49,13 @@ async fn handle_event(event: Event<OsString>, state: &mut State) {
         name = ?event.name
     );
 
-    if state.has_socket {
-        match state.rx.try_recv() {
+    if state.has_socket() {
+        match state.rx_try_recv() {
             Ok(SocketMessage::UpdateWatches) => state.reload_watches(),
-            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::error::TryRecvError::Empty) => (),
             Err(error) => {
                 event!(Level::WARN, ?error);
-                state.has_socket = false;
+                state.unset_socket();
             }
         };
     }
@@ -74,7 +81,7 @@ async fn handle_event(event: Event<OsString>, state: &mut State) {
         };
 
         event!(Level::WARN, ?event.mask, path = ?watch.path, "removing watch");
-        state.failed_watches.push(watch);
+        state.push_failed_watch(watch);
         return;
     }
 
@@ -111,14 +118,16 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let state = Arc::new(Mutex::new({
-        let mut state = State::new(&mut inotify, CONFIG.get().unwrap().to_owned());
-        state.reload_watches();
-        state
-    }));
+    let state = Arc::new(Shared {
+        state: {
+            let mut state = State::new(&mut inotify, CONFIG.get().unwrap().to_owned());
+            state.reload_watches();
+            state.into()
+        },
+    });
 
     let buffer = [0; 4096];
-    let Ok(mut events_stream) = inotify.into_event_stream(buffer) else {
+    let Ok(events_stream) = inotify.into_event_stream(buffer) else {
         return ExitCode::FAILURE;
     };
 
@@ -127,19 +136,21 @@ async fn main() -> ExitCode {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(ONE_SECOND).await;
-                state.lock().await.recover_watches();
+                state.recover_watches();
             }
         });
     }
 
-    while let Some(event) = events_stream.next().await {
-        let Ok(event) = event else {
-            event!(Level::ERROR, ?event, "failed to parse event");
-            break;
-        };
+    events_stream
+        .for_each_concurrent(None, |event| async {
+            let Ok(event) = event else {
+                event!(Level::ERROR, ?event, "failed to parse event");
+                return;
+            };
 
-        handle_event(event, &mut *state.lock().await).await;
-    }
+            handle_event(event, state.clone()).await;
+        })
+        .await;
 
     ExitCode::SUCCESS
 }

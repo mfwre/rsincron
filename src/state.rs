@@ -4,6 +4,7 @@ use crate::{
     SocketMessage, SOCKET,
 };
 use inotify::{Inotify, WatchDescriptor, WatchMask};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{event, span, Level};
 
 use std::{
@@ -13,13 +14,12 @@ use std::{
     os::unix::net::UnixListener,
     path::Path,
     str::FromStr,
-    sync::mpsc::Sender,
-    sync::mpsc::{self, Receiver},
+    sync::{Arc, Mutex, MutexGuard},
     thread,
 };
 
 #[tracing::instrument(skip_all)]
-fn setup_socket(tx: Sender<SocketMessage>) -> bool {
+fn setup_socket(tx: UnboundedSender<SocketMessage>) -> bool {
     let Ok(ref socket) = *SOCKET else {
         event!(Level::WARN, error = ?SOCKET.as_deref().unwrap_err(), "failed to get socket path");
         return false;
@@ -69,7 +69,7 @@ type Watches = HashMap<WatchDescriptor, WatchData>;
 pub struct State {
     pub failed_watches: Vec<WatchData>,
     pub has_socket: bool,
-    pub rx: Receiver<SocketMessage>,
+    pub rx: UnboundedReceiver<SocketMessage>,
 
     config: Config,
     inotify_watches: inotify::Watches,
@@ -80,7 +80,7 @@ pub struct State {
 
 impl State {
     pub fn new(inotify: &mut Inotify, config: Config) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::unbounded_channel();
 
         Self {
             rx,
@@ -194,3 +194,46 @@ impl State {
         self.watches.insert(descriptor, watch);
     }
 }
+
+pub struct Shared {
+    pub state: Mutex<State>,
+}
+
+impl Shared {
+    fn with_lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap()
+    }
+    pub fn reload_watches(&self) {
+        self.with_lock().reload_watches();
+    }
+
+    pub fn recover_watches(&self) {
+        self.with_lock().recover_watches();
+    }
+
+    pub fn get_watch(&self, wd: &WatchDescriptor) -> Option<WatchData> {
+        self.with_lock().get_watch(wd).cloned()
+    }
+
+    pub fn remove_watch(&self, wd: &WatchDescriptor) -> Option<WatchData> {
+        self.with_lock().remove_watch(wd)
+    }
+
+    pub fn has_socket(&self) -> bool {
+        self.with_lock().has_socket
+    }
+
+    pub fn rx_try_recv(&self) -> Result<SocketMessage, mpsc::error::TryRecvError> {
+        self.with_lock().rx.try_recv()
+    }
+
+    pub fn push_failed_watch(&self, watch: WatchData) {
+        self.with_lock().failed_watches.push(watch)
+    }
+
+    pub fn unset_socket(&self) {
+        self.with_lock().has_socket = false;
+    }
+}
+
+pub type ArcShared = Arc<Shared>;
